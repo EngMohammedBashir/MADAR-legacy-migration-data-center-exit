@@ -1,0 +1,47 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+.terraform.lock.hcl
+
+# Secrets / environment
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+secrets.*
+
+# VM images and disks
+*.iso
+*.ova
+*.ovf
+*.vmdk
+*.vdi
+*.vhd
+*.vhdx
+*.vmem
+*.vmss
+*.vmsn
+*.vmx.lck/
+
+# Generated local migration data
+legacy-lab/generated/
+legacy-lab/output/
+local-evidence/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
