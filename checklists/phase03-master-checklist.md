@@ -27,14 +27,14 @@
 - [x] Dynamically allocated disk. — 25 GB virtual disk.
 - [x] Configure networking. — VMware NAT; guest interface `ens33`.
 - [x] Patch/base-configure guest. — OS patched, rebooted, post-reboot validation passed.
-- [x] Install workload dependencies. — Python 3.12.3, pip 24.0, PostgreSQL 16.14 + contrib.
-- [ ] Install shipment application.
-- [ ] Install/configure database. — PostgreSQL engine installed and active; application database/role/schema still pending.
+- [x] Install workload dependencies. — Python 3.12.3, pip 24.0, PostgreSQL 16.14 + contrib, isolated Python venv.
+- [x] Install shipment application. — Flask dashboard/API backed by real PostgreSQL data.
+- [x] Install/configure database. — `madar_legacy`, `madar_app`, customers/shipments/shipment_events schema.
 - [ ] Create operational-file area.
 - [ ] Configure scheduled/background job.
 - [ ] Create pre-migration snapshot/backup.
 
-### Source-lab milestone evidence captured locally
+### Source-lab evidence captured locally
 
 - `madar-legacy-vm-system-baseline.png`
 - `madar-legacy-vm-network-ssh.png`
@@ -42,19 +42,24 @@
 - `madar-base-os-patched.png`
 - `madar-post-reboot-validation.png`
 - `madar-runtime-postgresql-installed.png`
+- `madar-postgresql-database-role-created.png`
+- `madar-postgresql-schema-created.png`
+- `madar-python-venv-psycopg2-ready.png`
+- `madar-deterministic-dataset-baseline.png`
+- `madar-application-dashboard.png`
 
 ## D — Synthetic data & source proof
 
-- [ ] Generate deterministic fictional customers/shipments.
+- [x] Generate deterministic fictional customers/shipments. — 10 customers / 50 shipments / 150 shipment events. Repository seed now also fixes timestamps and event progression; local VM must rerun the corrected version before final baseline.
 - [ ] Generate operational files.
-- [ ] Demonstrate application read path.
-- [ ] Demonstrate application write path.
+- [x] Demonstrate application read path. — Dashboard/API reads PostgreSQL customers, shipments, events and summary counts.
+- [ ] Demonstrate application write path. — Direct SQL writes were exercised during setup, but an application-level write path is still required.
 - [ ] Demonstrate background job.
-- [ ] Capture DB row counts.
+- [x] Capture DB row counts. — PostgreSQL independently confirmed `10 / 50 / 150`.
 - [ ] Capture representative aggregates.
 - [ ] Generate SHA-256 file manifest.
 - [ ] Record file count/size.
-- [ ] Capture source evidence.
+- [x] Capture source evidence. — Focused screenshots captured locally; binary upload still pending review.
 
 ## E — Discovery
 
@@ -90,7 +95,7 @@
 - [ ] `terraform validate`.
 - [ ] Review `terraform plan`.
 - [ ] Review IAM/network exposure.
-- [ ] Confirm no secrets committed.
+- [x] Confirm no secrets committed in current application implementation. — DB password is supplied through `MADAR_DB_PASSWORD`; `.env`, keys and venvs remain ignored.
 
 ## H — Migration execution
 
