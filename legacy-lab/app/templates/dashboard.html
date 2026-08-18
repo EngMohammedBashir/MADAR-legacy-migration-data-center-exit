@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MADAR Logistics - Operations Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <script src="https://unpkg.com/feather-icons"></script>
+</head>
+<body>
+<div class="app-container">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon"><i data-feather="box"></i></div>
+      <div class="brand-text"><h1>MADAR</h1><p>Shipment Management System</p></div>
+    </div>
+    <ul class="nav-list">
+      <li class="nav-item active"><button data-view="dashboard"><i data-feather="grid"></i>Dashboard</button></li>
+      <li class="nav-item"><button data-view="shipments"><i data-feather="truck"></i>Shipments</button></li>
+      <li class="nav-item"><button data-view="customers"><i data-feather="users"></i>Customers</button></li>
+      <li class="nav-item"><button data-view="system"><i data-feather="activity"></i>System Status</button></li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="status-title">System Status</div>
+      <div class="status-indicator"><span class="dot"></span>LIVE</div>
+      <div class="estate-label">Legacy Estate</div>
+      <div class="estate-value">MADAR-LEGACY-01</div>
+      <span class="badge-tag">On-Premises</span>
+    </div>
+  </aside>
+
+  <div class="main-wrapper">
+    <header class="top-bar">
+      <div class="top-bar-left"><button class="menu-toggle"><i data-feather="menu"></i></button><span class="page-title" id="pageTitle">Operations Dashboard</span></div>
+      <div class="top-bar-right">
+        <div class="live-pill"><span class="dot"></span>SYSTEM LIVE</div>
+        <div class="user-profile"><div class="user-info"><span class="user-name">MADAR Admin</span><span class="user-role">Operations</span></div><div class="avatar">MA</div></div>
+      </div>
+    </header>
+
+    <div class="content-layout">
+      <main class="content-main">
+        <section class="page-view active-view" id="dashboardView">
+          <section class="hero-banner">
+            <div class="hero-text">
+              <p class="hero-sub">REGIONAL LOGISTICS CONTROL</p>
+              <h2 class="hero-title">Shipment visibility across the MADAR network.</h2>
+              <p class="hero-desc">Monitor customers, active shipments and operational movement from the legacy shipment-management platform.</p>
+            </div>
+            <div class="hero-graphic">
+              <img src="{{ url_for('static', filename='images/madar-hero-truck.png') }}" alt="MADAR logistics truck and global shipment network" class="hero-truck-image" />
+            </div>
+            <div class="estate-chip"><span>Source Estate</span><strong>ON-PREMISES</strong></div>
+          </section>
+
+          <section class="kpi-grid">
+            <article class="kpi-card"><div class="kpi-header"><div class="kpi-icon teal"><i data-feather="package"></i></div><span class="kpi-title">TOTAL SHIPMENTS</span></div><div class="kpi-value" id="kpiTotal">--</div><div class="kpi-sub">Tracked consignments</div></article>
+            <article class="kpi-card"><div class="kpi-header"><div class="kpi-icon amber"><i data-feather="truck"></i></div><span class="kpi-title">IN TRANSIT</span></div><div class="kpi-value" id="kpiTransit">--</div><div class="kpi-sub">Currently moving</div></article>
+            <article class="kpi-card"><div class="kpi-header"><div class="kpi-icon green"><i data-feather="check-circle"></i></div><span class="kpi-title">DELIVERED</span></div><div class="kpi-value" id="kpiDelivered">--</div><div class="kpi-sub">Completed shipments</div></article>
+            <article class="kpi-card"><div class="kpi-header"><div class="kpi-icon blue"><i data-feather="users"></i></div><span class="kpi-title">CUSTOMERS</span></div><div class="kpi-value" id="kpiCustomers">--</div><div class="kpi-sub">Active B2B accounts</div></article>
+          </section>
+
+          <section class="table-panel">
+            <div class="panel-header"><div class="panel-title"><i data-feather="list"></i>Recent Shipments</div><div class="search-box"><i data-feather="search" class="search-icon"></i><input type="text" id="searchInput" placeholder="Search customer, route or status..." /></div></div>
+            <div class="table-scroll"><table class="data-table"><thead><tr><th>Shipment</th><th>Customer</th><th>Route</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="shipmentTable"><tr><td colspan="6" class="loading-cell">Loading operational data...</td></tr></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="page-view" id="shipmentsView">
+          <div class="section-heading"><div><p class="section-eyebrow">OPERATIONS</p><h2>All Shipments</h2><p>Complete shipment inventory from the source legacy database.</p></div><div class="count-chip" id="shipmentCountChip">-- shipments</div></div>
+          <section class="table-panel"><div class="panel-header"><div class="panel-title"><i data-feather="truck"></i>Shipment Inventory</div><div class="search-box"><i data-feather="search" class="search-icon"></i><input type="text" id="shipmentSearchInput" placeholder="Filter shipments..." /></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Shipment</th><th>Customer</th><th>Route</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="allShipmentTable"></tbody></table></div></section>
+        </section>
+
+        <section class="page-view" id="customersView">
+          <div class="section-heading"><div><p class="section-eyebrow">CUSTOMER NETWORK</p><h2>B2B Customers</h2><p>Customers represented in the MADAR source estate.</p></div></div>
+          <div class="customer-grid" id="customerGrid"></div>
+        </section>
+
+        <section class="page-view" id="systemView">
+          <div class="section-heading"><div><p class="section-eyebrow">SOURCE ESTATE</p><h2>System Status</h2><p>Live application and database connectivity checks.</p></div></div>
+          <div class="system-grid">
+            <article class="system-card"><div class="system-card-icon green"><i data-feather="server"></i></div><div><span class="system-label">Application</span><strong>MADAR Legacy App</strong><small id="applicationStatus">Checking...</small></div></article>
+            <article class="system-card"><div class="system-card-icon teal"><i data-feather="database"></i></div><div><span class="system-label">Database</span><strong>PostgreSQL</strong><small id="databaseStatus">Checking...</small></div></article>
+            <article class="system-card"><div class="system-card-icon blue"><i data-feather="hard-drive"></i></div><div><span class="system-label">Legacy Host</span><strong>MADAR-LEGACY-01</strong><small>On-Premises Source Estate</small></div></article>
+            <article class="system-card"><div class="system-card-icon amber"><i data-feather="activity"></i></div><div><span class="system-label">Dataset</span><strong id="systemDataset">Loading...</strong><small>Deterministic migration baseline</small></div></article>
+          </div>
+        </section>
+      </main>
+
+      <aside class="details-panel" id="detailsPanel">
+        <div class="details-header"><h3>Shipment Details</h3><button class="close-panel-btn" id="closePanelBtn">✕</button></div>
+        <div class="shipment-card-detail"><div class="id-row"><h4 id="detailShipmentId">Select Shipment</h4><span class="badge-status created" id="detailStatus">--</span></div><div class="route-detail" id="detailRoute">Select a shipment to inspect its route.</div><div class="meta-row"><span>Customer</span><strong id="detailCustomer">-</strong></div><div class="meta-row"><span>Updated</span><strong id="detailUpdated">-</strong></div></div>
+        <div class="timeline-title">Shipment Timeline</div><div class="timeline" id="timelineContainer"><div class="timeline-empty">Select View on any shipment.</div></div>
+      </aside>
+    </div>
+
+    <footer class="app-footer"><div>MADAR Logistics · Migration Lab</div><div>Legacy Shipment Management System v1.0.0</div></footer>
+  </div>
+</div>
+
+<script>
+feather.replace();
+let allShipments = [];
+
+function formatDate(value) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("en", {month: "short", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"}).format(new Date(value));
+}
+function getBadgeClass(status) { return status.toLowerCase().replace(/_/g, "-"); }
+
+async function fetchSummary() {
+  const res = await fetch("/api/summary");
+  if (!res.ok) throw new Error("Unable to load summary");
+  const data = await res.json();
+  kpiTotal.textContent = data.shipments;
+  kpiTransit.textContent = data.in_transit;
+  kpiDelivered.textContent = data.delivered;
+  kpiCustomers.textContent = data.customers;
+  shipmentCountChip.textContent = `${data.shipments} shipments`;
+  systemDataset.textContent = `${data.customers} customers / ${data.shipments} shipments / ${data.events} events`;
+}
+
+async function fetchShipments() {
+  const res = await fetch("/api/shipments");
+  if (!res.ok) throw new Error("Unable to load shipments");
+  allShipments = await res.json();
+  renderShipmentTable(allShipments, "shipmentTable");
+  renderShipmentTable(allShipments, "allShipmentTable");
+  if (allShipments.length) loadShipmentDetail(allShipments[0].shipment_id);
+}
+
+function renderShipmentTable(data, targetId) {
+  const tbody = document.getElementById(targetId);
+  if (!data.length) { tbody.innerHTML = '<tr><td colspan="6" class="loading-cell">No shipments found.</td></tr>'; return; }
+  tbody.innerHTML = data.map(row => {
+    const id = `MAD-${String(row.shipment_id).padStart(4, "0")}`;
+    return `<tr><td><span class="shipment-code">${id}</span></td><td><div class="customer-info"><span class="name">${row.company_name}</span><small>Customer #${row.customer_id}</small></div></td><td><span class="route-text">${row.origin}<span class="route-arrow">→</span>${row.destination}</span></td><td><span class="badge-status ${getBadgeClass(row.status)}">${row.status.replace(/_/g, " ")}</span></td><td>${formatDate(row.updated_at)}</td><td><button class="btn-view" onclick="loadShipmentDetail(${row.shipment_id})">View</button></td></tr>`;
+  }).join("");
+  feather.replace();
+}
+
+async function loadShipmentDetail(id) {
+  const shipment = allShipments.find(item => item.shipment_id === id);
+  if (!shipment) return;
+  detailsPanel.classList.remove("hidden-panel");
+  detailShipmentId.textContent = `MAD-${String(id).padStart(4, "0")}`;
+  detailStatus.textContent = shipment.status.replace(/_/g, " ");
+  detailStatus.className = `badge-status ${getBadgeClass(shipment.status)}`;
+  detailRoute.textContent = `${shipment.origin} → ${shipment.destination}`;
+  detailCustomer.textContent = shipment.company_name;
+  detailUpdated.textContent = formatDate(shipment.updated_at);
+  const res = await fetch(`/api/shipments/${id}/events`);
+  if (!res.ok) throw new Error("Unable to load events");
+  renderTimeline(await res.json(), shipment.status);
+}
+
+function renderTimeline(events, currentStatus) {
+  const orderedStates = ["CREATED", "PICKED_UP", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED"];
+  const currentIndex = orderedStates.indexOf(currentStatus);
+  timelineContainer.innerHTML = orderedStates.map((state, index) => {
+    const event = events.find(item => item.event_type === state);
+    let stateClass = "", icon = "circle", time = "Pending", description = "Awaiting next update";
+    if (currentIndex >= 0 && index < currentIndex) { stateClass = "completed"; icon = "check"; description = "Completed"; }
+    if (currentIndex >= 0 && index === currentIndex) {
+      if (currentStatus === "DELIVERED") { stateClass = "completed"; icon = "check"; description = "Shipment delivered"; }
+      else { stateClass = "active"; icon = "truck"; description = "Current shipment stage"; }
+    }
+    if (event) { time = formatDate(event.event_time); description = "Recorded in source system"; }
+    if (currentStatus === "DELIVERED" && index <= currentIndex) { stateClass = "completed"; icon = "check"; if (!event) description = "Completed before delivery"; }
+    return `<div class="timeline-step ${stateClass}"><div class="timeline-icon"><i data-feather="${icon}"></i></div><div class="timeline-content"><h5>${state.replace(/_/g, " ")}</h5><div class="time">${time}</div><div class="desc">${description}</div></div></div>`;
+  }).join("");
+  feather.replace();
+}
+
+async function fetchCustomers() {
+  const res = await fetch("/api/customers");
+  if (!res.ok) throw new Error("Unable to load customers");
+  const customers = await res.json();
+  customerGrid.innerHTML = customers.map(c => `<article class="customer-card"><div class="customer-avatar">${c.company_name.charAt(0).toUpperCase()}</div><div><h3>${c.company_name}</h3><p>${c.region}</p><span>${c.shipment_count} shipments</span></div></article>`).join("");
+}
+
+async function fetchHealth() {
+  const response = await fetch("/api/health");
+  if (response.ok) { applicationStatus.textContent = "Application responding"; applicationStatus.className = "status-good"; databaseStatus.textContent = "Database connected"; databaseStatus.className = "status-good"; }
+  else { applicationStatus.textContent = "Application degraded"; applicationStatus.className = "status-bad"; databaseStatus.textContent = "Database unavailable"; databaseStatus.className = "status-bad"; }
+}
+
+function applySearch(value, target) {
+  const q = value.toLowerCase();
+  const filtered = allShipments.filter(item => `${item.shipment_id} ${item.company_name} ${item.origin} ${item.destination} ${item.status}`.toLowerCase().includes(q));
+  renderShipmentTable(filtered, target);
+}
+searchInput.addEventListener("input", e => applySearch(e.target.value, "shipmentTable"));
+shipmentSearchInput.addEventListener("input", e => applySearch(e.target.value, "allShipmentTable"));
+
+const viewMap = {dashboard: ["dashboardView", "Operations Dashboard"], shipments: ["shipmentsView", "Shipments"], customers: ["customersView", "Customers"], system: ["systemView", "System Status"]};
+document.querySelectorAll(".nav-item button").forEach(button => button.addEventListener("click", () => {
+  document.querySelectorAll(".page-view").forEach(s => s.classList.remove("active-view"));
+  document.querySelectorAll(".nav-item").forEach(i => i.classList.remove("active"));
+  const [element, title] = viewMap[button.dataset.view];
+  document.getElementById(element).classList.add("active-view");
+  button.closest(".nav-item").classList.add("active");
+  pageTitle.textContent = title;
+}));
+closePanelBtn.addEventListener("click", () => detailsPanel.classList.add("hidden-panel"));
+
+Promise.all([fetchSummary(), fetchShipments(), fetchCustomers(), fetchHealth()]).catch(error => {
+  console.error(error);
+  shipmentTable.innerHTML = '<tr><td colspan="6" class="error-cell">Unable to load source operational data.</td></tr>';
+});
+</script>
+</body>
+</html>
