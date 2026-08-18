@@ -1,148 +1,132 @@
 # Phase 03 — Current State
 
-**Status:** SOURCE LAB BASELINE + RECOVERABILITY COMPLETE — DISCOVERY NEXT  
+**Status:** DISCOVERY + ASSESSMENT + TARGET DESIGN COMPLETE — PRE-MIGRATION READINESS IN PROGRESS  
 **AWS paid-resource window:** NOT STARTED  
-**Current objective:** freeze the pre-migration source evidence, inventory dependencies, draw the dependency map, then assess migration dispositions before approving an AWS target.
+**Current objective:** finish zero-cost readiness and enter the migration session with an approved target, ordered runbook, validation gates and cleanup plan.
 
 ## Verified source estate
 
 ```text
 MADAR-LEGACY-01
 ├── Ubuntu Server 24.04.4 LTS
-├── 2 vCPU / 2560 MB RAM
+├── 2 vCPU / ~2.4 GiB RAM
 ├── PostgreSQL 16.14
 ├── Flask 3.1.3 on port 8080
 ├── Customers: 10
 ├── Shipments: 50
 ├── Shipment events: 150
 ├── Operational CSV exports/reports
-├── Daily scheduled operations report
-└── Pre-migration database + file backups
+├── Daily scheduled operations report at 02:00 Asia/Riyadh
+└── Pre-migration database + file/config backups
 ```
 
-The representative lab remains intentionally compact: multiple logical legacy roles coexist on one VMware VM because the local host is resource constrained. Documentation distinguishes the lab topology from a real multi-server production estate.
+## Completed engineering gates
 
-## Completed in the latest milestone
+### Source baseline and recoverability
 
-### Deterministic source baseline
+- deterministic baseline restored to `10 customers / 50 shipments / 150 shipment events`,
+- source write path proven transactionally and then reset,
+- operational-file SHA-256 baseline verified,
+- scheduled cron processing proven,
+- PostgreSQL custom-format pre-migration dump verified,
+- operational-file recovery archive verified,
+- PostgreSQL configuration copied before DMS-related changes to:
+  `/home/madaradmin/madar-backups/postgresql-16-main-before-dms`.
 
-The corrected repository seed was synchronized to the VM and rerun. PostgreSQL independently reconfirmed `10 customers / 50 shipments / 150 shipment events`.
+### Discovery and dependency assessment
 
-### Operational files and integrity
+Discovery verified:
 
-The source now includes deterministic shipment-linked operational artifacts under `~/madar-legacy-data/`:
+- 2 vCPU / ~2.4 GiB RAM,
+- ~23 GiB root filesystem with ~5.4 GiB used during discovery,
+- Flask/Python listener on `0.0.0.0:8080`,
+- PostgreSQL listener on `127.0.0.1:5432`,
+- SSH on TCP 22,
+- active PostgreSQL, cron and SSH services,
+- VMware NAT source network `192.168.14.128/24`,
+- application -> PostgreSQL dependency,
+- cron -> PostgreSQL -> local report-file dependency.
 
-- `exports/shipments_export.csv`,
-- `reports/shipment_status_report.csv`,
-- timestamped operations reports,
-- `manifests/source-sha256.txt`,
-- background-job logs.
+The workload is treated as several logical components rather than one indivisible VM.
 
-The source manifest was verified with `sha256sum -c`; both baseline source files returned `OK`. File count and byte sizes were also recorded.
-
-### Scheduled/background processing
-
-`generate_operations_report.sh` queries PostgreSQL, writes a timestamped status report, and logs success. A controlled two-minute cron schedule produced reports at consecutive two-minute intervals without interactive execution, proving the scheduled dependency. The retained lab schedule was then changed to daily at `02:00`.
-
-The server timezone is explicitly `Asia/Riyadh`; NTP synchronization is active.
-
-### Application write path
-
-The Flask application now exposes:
+### Approved migration strategy
 
 ```text
-PATCH /api/shipments/<id>/status
+Ubuntu + Flask -------- AWS MGN -------------> EC2
+PostgreSQL 16 --------- AWS DMS Full+CDC ----> RDS PostgreSQL
+Operational files ----- validated transfer --> S3
+Scheduled job ---------- reconfigure --------> target DB/storage path
+Target protection ------ AWS Backup ----------> where useful after cutover
 ```
 
-The endpoint validates status, updates the shipment, inserts the matching shipment event, and commits both operations transactionally. A controlled proof changed shipment 3 from `IN_TRANSIT` to `DELIVERED` and created event 151. PostgreSQL independently verified both writes.
+MGN rehosts the machine/runtime. DMS replatforms and synchronizes database data. They solve different migration concerns and are intentionally used together.
 
-After evidence capture, the deterministic seed was rerun. The migration baseline was restored to `10 / 50 / 150`, and shipment 3 returned to `IN_TRANSIT`.
+### Approved lab target
 
-### Pre-migration recoverability point
+- Region: `us-east-1`.
+- VPC: `10.30.0.0/16`.
+- Public application subnet: `10.30.1.0/24`.
+- Private DB subnets: `10.30.11.0/24`, `10.30.12.0/24`.
+- EC2 target candidate: `t3.small`.
+- RDS PostgreSQL: small burstable class, Single-AZ; `db.t3.micro` candidate subject to execution-time availability.
+- DMS: minimum suitable capacity, Full Load + CDC.
+- S3 for operational files.
+- No NAT Gateway, no ALB and no Multi-AZ RDS for this short-lived migration proof.
 
-Database backup:
+### DMS / CDC source readiness
+
+Verified:
 
 ```text
-~/madar-backups/madar_legacy_pre_migration.dump
+PostgreSQL version          16.14
+wal_level                   replica
+max_replication_slots       10
+max_wal_senders             10
+config file                 /etc/postgresql/16/main/postgresql.conf
 ```
 
-The custom-format PostgreSQL dump was opened successfully with `pg_restore --list` and SHA-256 verified.
+`wal_level=replica` is intentionally retained before AWS execution. DMS Premigration Assessment will be used first to record the AWS-native readiness finding, then required source changes will be applied and reassessed before Full Load + CDC.
 
-Operational-file backup:
+### MGN source connectivity
 
-```text
-~/madar-backups/madar_operational_files_pre_migration.tar.gz
-```
+Outbound HTTPS from the VMware source to an AWS MGN-related regional S3 endpoint in `us-east-1` was verified. HTTP 403 from the unauthenticated bucket request confirmed AWS network reachability; no AWS migration resources were created by this check.
 
-The archive contents were listed successfully and SHA-256 verified. Database and file backups remain local; secrets and local backup artifacts are not committed.
+## Cost posture
 
-## Security posture
+The AWS paid-resource window has **not started**. Preparation intentionally avoids running EC2/RDS/DMS/MGN target resources while planning is still in progress.
 
-- normal workload DB identity is `madar_app`, not the PostgreSQL superuser,
-- application secrets are not committed,
-- the interactive application process currently receives `MADAR_DB_PASSWORD` through its environment,
-- the unattended PostgreSQL client job uses the user's protected `.pgpass` (`0600`) rather than embedding a password in cron,
-- `.venv`, `.env`, keys, credentials and local backup artifacts must remain outside Git,
-- the lab credential exposed during the interactive build should be rotated before final portfolio publication.
+Execution principles:
 
-## Evidence captured locally in this milestone
+- check cost/credits immediately before creation,
+- create resources only when needed,
+- target a short migration sprint (roughly three hours where practical),
+- treat AWS credits as real money,
+- capture evidence before deletion,
+- aggressively clean temporary resources after acceptance.
 
-In addition to the earlier VM/runtime/application screenshots:
+## AWS-native automation preference
 
-```text
-madar-source-files-sha256-baseline.png
-madar-server-timezone-riyadh.png
-madar-cron-background-job-verified.png
-madar-application-write-path-verified.png
-madar-source-baseline-restored.png
-madar-pre-migration-db-backup-verified-v2.png
-madar-pre-migration-files-backup-verified.png
-```
+Before giving a long sequence of manual commands, evaluate whether AWS provides a suitable managed assessment, agent or automation. Prefer the AWS-native option when it materially reduces toil and is affordable. Manual source changes remain appropriate where AWS cannot perform the change safely.
 
-A final combined snapshot-manifest screenshot should be captured if/when the combined manifest command is executed. Binary screenshots remain local until reviewed for secrets and unrelated desktop information.
+Examples: DMS Premigration Assessment, MGN replication workflow and post-cutover AWS Backup.
 
-## Repository implementation now includes
+## Exact next actions
 
-```text
-legacy-lab/app/                 # Flask app, schema, deterministic seed, UI
-legacy-lab/scripts/             # scheduled operations report script
-runbooks/source-lab-operations.md
-checklists/phase03-master-checklist.md
-evidence/README.md
-```
-
-## Exact next action
-
-1. Inventory compute/runtime and systemd/process state.
-2. Inventory listening ports and network dependencies.
-3. Inventory application configuration without exposing secrets.
-4. Inventory PostgreSQL/database dependencies.
-5. Inventory filesystem paths and operational-file dependencies.
-6. Inventory cron/scheduled jobs.
-7. Inventory identities/credentials by role, not secret value.
-8. Record DNS/external integration assumptions.
-9. Capture representative source aggregates needed for later reconciliation.
-10. Draw the source dependency map.
-11. Classify statefulness/criticality and evaluate migration disposition per component.
-12. Only then approve the AWS target and migration services.
+1. Finalize the secure temporary connectivity design from AWS DMS to the local PostgreSQL source; do not expose PostgreSQL publicly.
+2. At migration-session start, check credits/cost and quotas.
+3. Create AWS foundation in the order defined in `runbooks/migration-day-runbook.md`.
+4. Run DMS Premigration Assessment before CDC remediation and capture the finding.
+5. Remediate/reassess PostgreSQL logical-replication readiness.
+6. Execute DMS Full Load + CDC and prove a live source change arrives in RDS.
+7. Execute MGN test/cutover workflow for the Ubuntu/Flask runtime.
+8. Transfer operational files to S3 and verify integrity.
+9. Validate application, data, files and scheduled processing.
+10. Cut over only after reconciliation passes; preserve source until acceptance.
+11. Apply target backup protection where useful.
+12. Clean paid temporary resources and record actual cost/credit delta.
 
 ## Important hold point
 
-**Do not run Terraform apply and do not select MGN/DMS/other migration tooling as a foregone conclusion yet.** Discovery evidence comes first; the migration strategy must follow the workload dependencies rather than lead them.
+**Do not create paid AWS migration resources until the migration session explicitly starts.**
 
-## Source-lab exit criteria
-
-- VM boots reliably. ✅
-- workload is reachable and functional. ✅
-- deterministic DB baseline is verified. ✅
-- operational files exist and are checksummed. ✅
-- scheduled/background operation is demonstrated. ✅
-- application read and write paths are demonstrated. ✅
-- pre-migration database/file recoverability point exists. ✅
-- inventory and dependencies are documented. ⏳
-- representative aggregates are frozen for later reconciliation. ⏳
-- dependency map is documented. ⏳
-
-## Blockers
-
-None. The project is deliberately paused at the discovery/assessment gate before AWS target implementation.
+The repository is now prepared to move from zero-cost readiness into controlled AWS execution.
