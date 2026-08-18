@@ -1,209 +1,148 @@
 # Phase 03 — Current State
 
-**Status:** SOURCE LAB BUILD — DATABASE + APPLICATION + DETERMINISTIC DATA READY  
+**Status:** SOURCE LAB BASELINE + RECOVERABILITY COMPLETE — DISCOVERY NEXT  
 **AWS paid-resource window:** NOT STARTED  
-**Current objective:** complete the remaining source-side operational-file/background-job work, capture the full pre-migration baseline, create a snapshot/backup point, then begin formal discovery before selecting the AWS target.
+**Current objective:** freeze the pre-migration source evidence, inventory dependencies, draw the dependency map, then assess migration dispositions before approving an AWS target.
 
-## Story position
-
-MADAR already had a traditional estate before its AWS journey. Phase 01 established cloud foundations. Phase 02 proved a new event-driven cloud-native workload. Phase 03 now models and proves the remaining shipment-management estate so MADAR can approach data-center exit as a measured migration engagement rather than an EC2 deployment exercise.
-
-## Local lab constraint and topology
-
-The Windows lab host has approximately 8 GB RAM and an Intel Core i3-N305. The representative estate therefore uses one lightweight VMware VM carrying several logical legacy roles rather than pretending to run a full multi-server enterprise estate locally.
+## Verified source estate
 
 ```text
-Windows 11 host
-      |
-      | VMware NAT / SSH / HTTP
-      v
 MADAR-LEGACY-01
-      |
-      +-- Ubuntu Server 24.04.4 LTS
-      +-- Flask shipment application
-      +-- PostgreSQL 16.14
-      +-- operational files       [NEXT]
-      +-- scheduled/background job [NEXT]
+├── Ubuntu Server 24.04.4 LTS
+├── 2 vCPU / 2560 MB RAM
+├── PostgreSQL 16.14
+├── Flask 3.1.3 on port 8080
+├── Customers: 10
+├── Shipments: 50
+├── Shipment events: 150
+├── Operational CSV exports/reports
+├── Daily scheduled operations report
+└── Pre-migration database + file backups
 ```
 
-## Source VM foundation — verified
+The representative lab remains intentionally compact: multiple logical legacy roles coexist on one VMware VM because the local host is resource constrained. Documentation distinguishes the lab topology from a real multi-server production estate.
 
-- VMware Workstation Pro 26H1.
-- VM: `MADAR-LEGACY-01`.
-- Ubuntu Server 24.04.4 LTS.
-- 2 vCPU.
-- 2560 MB RAM.
-- 25 GB dynamically allocated virtual disk.
-- VMware NAT networking.
-- Guest interface observed as `ens33`, `192.168.14.128/24` during the current session.
-- OpenSSH active and remote administration from Windows verified.
-- Guided LVM layout corrected from roughly 11.5 GB root capacity to approximately 23 GB usable root filesystem.
-- Ubuntu packages patched; required reboot completed; post-reboot validation passed.
+## Completed in the latest milestone
 
-## Runtime and database — verified
+### Deterministic source baseline
 
-Installed and verified:
+The corrected repository seed was synchronized to the VM and rerun. PostgreSQL independently reconfirmed `10 customers / 50 shipments / 150 shipment events`.
 
-- Python 3.12.3,
-- pip 24.0,
-- PostgreSQL 16.14,
-- `postgresql-contrib`,
-- PostgreSQL systemd service active.
+### Operational files and integrity
 
-Database implementation:
+The source now includes deterministic shipment-linked operational artifacts under `~/madar-legacy-data/`:
 
-- application role: `madar_app`,
-- application database: `madar_legacy`,
-- tables: `customers`, `shipments`, `shipment_events`,
-- application account owns the application database/schema objects rather than using the PostgreSQL superuser for normal workload access.
+- `exports/shipments_export.csv`,
+- `reports/shipment_status_report.csv`,
+- timestamped operations reports,
+- `manifests/source-sha256.txt`,
+- background-job logs.
 
-The repository now includes a reproducible `schema.sql` under `legacy-lab/app/`.
+The source manifest was verified with `sha256sum -c`; both baseline source files returned `OK`. File count and byte sizes were also recorded.
 
-## Python dependency isolation — verified
+### Scheduled/background processing
 
-Ubuntu 24.04 rejected a direct system-wide `pip install` because the base interpreter is externally managed under PEP 668. The lab deliberately did **not** bypass that protection with `--break-system-packages`.
+`generate_operations_report.sh` queries PostgreSQL, writes a timestamped status report, and logs success. A controlled two-minute cron schedule produced reports at consecutive two-minute intervals without interactive execution, proving the scheduled dependency. The retained lab schedule was then changed to daily at `02:00`.
 
-Instead:
+The server timezone is explicitly `Asia/Riyadh`; NTP synchronization is active.
 
-```bash
-sudo apt install -y python3-venv
-python3 -m venv .venv
-source .venv/bin/activate
-```
+### Application write path
 
-Application dependencies are isolated in `.venv` and pinned in `legacy-lab/app/requirements.txt`:
-
-- Flask 3.1.3,
-- psycopg2-binary 2.9.12.
-
-`.venv/` remains excluded by `.gitignore`.
-
-## Deterministic source dataset — verified
-
-A Python seed generator now produces a reproducible fictional logistics dataset.
-
-Baseline size:
+The Flask application now exposes:
 
 ```text
-Customers:        10
-Shipments:        50
-Shipment events: 150
+PATCH /api/shipments/<id>/status
 ```
 
-The repository seed implementation uses a fixed base timestamp and records every workflow stage reached by a shipment. Ten shipments exist at each workflow depth, so the event total is deterministically:
+The endpoint validates status, updates the shipment, inserts the matching shipment event, and commits both operations transactionally. A controlled proof changed shipment 3 from `IN_TRANSIT` to `DELIVERED` and created event 151. PostgreSQL independently verified both writes.
+
+After evidence capture, the deterministic seed was rerun. The migration baseline was restored to `10 / 50 / 150`, and shipment 3 returned to `IN_TRANSIT`.
+
+### Pre-migration recoverability point
+
+Database backup:
 
 ```text
-10 * (1 + 2 + 3 + 4 + 5) = 150 events
+~/madar-backups/madar_legacy_pre_migration.dump
 ```
 
-The database itself was queried independently and confirmed the `10 / 50 / 150` row counts.
+The custom-format PostgreSQL dump was opened successfully with `pg_restore --list` and SHA-256 verified.
 
-## Legacy shipment application — verified
-
-A lightweight Flask application now provides a real source workload backed by PostgreSQL rather than mock data.
-
-Implemented endpoints:
+Operational-file backup:
 
 ```text
-GET /
-GET /api/health
-GET /api/summary
-GET /api/customers
-GET /api/shipments
-GET /api/shipments/<id>/events
+~/madar-backups/madar_operational_files_pre_migration.tar.gz
 ```
 
-The dashboard provides:
+The archive contents were listed successfully and SHA-256 verified. Database and file backups remain local; secrets and local backup artifacts are not committed.
 
-- live shipment/customer KPIs,
-- shipment inventory,
-- search/filter behavior,
-- customer view,
-- system/database health view,
-- shipment detail panel,
-- workflow timeline.
+## Security posture
 
-The dashboard is reachable from the Windows host on the representative source address at port `8080` while the Flask process is running.
+- normal workload DB identity is `madar_app`, not the PostgreSQL superuser,
+- application secrets are not committed,
+- the interactive application process currently receives `MADAR_DB_PASSWORD` through its environment,
+- the unattended PostgreSQL client job uses the user's protected `.pgpass` (`0600`) rather than embedding a password in cron,
+- `.venv`, `.env`, keys, credentials and local backup artifacts must remain outside Git,
+- the lab credential exposed during the interactive build should be rotated before final portfolio publication.
 
-## Trustworthy failure behavior
+## Evidence captured locally in this milestone
 
-The application does **not** fall back to mock shipment data when PostgreSQL is unavailable. Database connectivity is a real dependency and `/api/health` returns a degraded/error response when that dependency cannot be reached.
-
-This is intentional: migration evidence must prove the real source/target dependency chain, not a visually healthy UI backed by fabricated fallback values.
-
-## Secret handling
-
-The database password is not committed to source code. The current lab process receives it through the `MADAR_DB_PASSWORD` environment variable.
-
-The repository ignores `.env`, key material, local virtual environments and other common secret-bearing paths.
-
-The current lab credential should be rotated before final public portfolio publication because it was exposed during the interactive build session; the repository itself does not contain that secret.
-
-## Evidence captured locally so far
-
-- `madar-legacy-vm-system-baseline.png`
-- `madar-legacy-vm-network-ssh.png`
-- `madar-lvm-storage-expanded.png`
-- `madar-base-os-patched.png`
-- `madar-post-reboot-validation.png`
-- `madar-runtime-postgresql-installed.png`
-- `madar-postgresql-database-role-created.png`
-- `madar-postgresql-schema-created.png`
-- `madar-python-venv-psycopg2-ready.png`
-- `madar-deterministic-dataset-baseline.png`
-- `madar-application-dashboard.png`
-
-These filenames are documented in the evidence index. Binary screenshots remain local until intentionally uploaded and reviewed for secrets/unrelated desktop information.
-
-## Repository implementation added in this milestone
+In addition to the earlier VM/runtime/application screenshots:
 
 ```text
-legacy-lab/app/
-├── README.md
-├── app.py
-├── requirements.txt
-├── schema.sql
-├── seed_data.py
-├── templates/
-│   └── dashboard.html
-└── static/
-    ├── css/
-    │   └── style.css
-    └── images/
-        └── madar-hero-truck.png   # local lab asset; repository upload pending provenance review
+madar-source-files-sha256-baseline.png
+madar-server-timezone-riyadh.png
+madar-cron-background-job-verified.png
+madar-application-write-path-verified.png
+madar-source-baseline-restored.png
+madar-pre-migration-db-backup-verified-v2.png
+madar-pre-migration-files-backup-verified.png
+```
+
+A final combined snapshot-manifest screenshot should be captured if/when the combined manifest command is executed. Binary screenshots remain local until reviewed for secrets and unrelated desktop information.
+
+## Repository implementation now includes
+
+```text
+legacy-lab/app/                 # Flask app, schema, deterministic seed, UI
+legacy-lab/scripts/             # scheduled operations report script
+runbooks/source-lab-operations.md
+checklists/phase03-master-checklist.md
+evidence/README.md
 ```
 
 ## Exact next action
 
-1. Synchronize the local VM seed script with the repository's corrected fully deterministic version and rerun it.
-2. Reconfirm `10 / 50 / 150` and one delivered shipment timeline after reseeding.
-3. Create the operational-file area with deterministic shipment-linked artifacts.
-4. Generate and verify a SHA-256 manifest plus file count/size baseline.
-5. Configure and demonstrate one scheduled/background operation.
-6. Demonstrate the application write path rather than only direct SQL writes/read-only UI behavior.
-7. Capture representative aggregates in addition to row counts.
-8. Create a pre-migration VM/database backup or snapshot point.
-9. Inventory compute, processes, ports, configuration, database, filesystem, job, identity and network dependencies.
-10. Draw the dependency map.
-11. Only after discovery/assessment, approve the migration strategy and AWS target architecture.
+1. Inventory compute/runtime and systemd/process state.
+2. Inventory listening ports and network dependencies.
+3. Inventory application configuration without exposing secrets.
+4. Inventory PostgreSQL/database dependencies.
+5. Inventory filesystem paths and operational-file dependencies.
+6. Inventory cron/scheduled jobs.
+7. Inventory identities/credentials by role, not secret value.
+8. Record DNS/external integration assumptions.
+9. Capture representative source aggregates needed for later reconciliation.
+10. Draw the source dependency map.
+11. Classify statefulness/criticality and evaluate migration disposition per component.
+12. Only then approve the AWS target and migration services.
 
 ## Important hold point
 
-**Do not run Terraform apply yet.**
+**Do not run Terraform apply and do not select MGN/DMS/other migration tooling as a foregone conclusion yet.** Discovery evidence comes first; the migration strategy must follow the workload dependencies rather than lead them.
 
-The target architecture remains intentionally undecided until the source workload, dependencies and migration evidence requirements are fully understood.
-
-## Exit criteria for source-lab stage
+## Source-lab exit criteria
 
 - VM boots reliably. ✅
 - workload is reachable and functional. ✅
-- database contains deterministic seed records. ✅, with local reseed to corrected fixed-timestamp generator still required.
-- operational files exist and can be checksummed. ⏳
-- scheduled/background operation is demonstrated. ⏳
+- deterministic DB baseline is verified. ✅
+- operational files exist and are checksummed. ✅
+- scheduled/background operation is demonstrated. ✅
+- application read and write paths are demonstrated. ✅
+- pre-migration database/file recoverability point exists. ✅
 - inventory and dependencies are documented. ⏳
-- full baseline counts/checksums are captured. ⏳
-- snapshot/backup point exists before migration changes. ⏳
+- representative aggregates are frozen for later reconciliation. ⏳
+- dependency map is documented. ⏳
 
 ## Blockers
 
-None currently. The remaining work is source-lab completion and discovery, not an infrastructure blocker.
+None. The project is deliberately paused at the discovery/assessment gate before AWS target implementation.
