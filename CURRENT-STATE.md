@@ -1,8 +1,8 @@
 # Phase 03 — Current State
 
-**Status:** PLANNING / SOURCE-LAB PREPARATION  
+**Status:** SOURCE LAB BUILD — BASE VM READY / RUNTIME + DATABASE INSTALLED  
 **AWS paid-resource window:** NOT STARTED  
-**Current objective:** build and baseline the representative legacy workload before choosing the final AWS target.
+**Current objective:** finish the representative legacy workload, seed deterministic data, prove source behavior, and capture the pre-migration baseline before selecting the final AWS target.
 
 ## Story position
 
@@ -18,17 +18,80 @@ The migration lab host has approximately:
 - approximately 48 GB free local storage at preflight,
 - Hyper-V features disabled at preflight.
 
-Therefore the lab will favor **one lightweight VM with several logical legacy roles** instead of pretending to run a full multi-server enterprise data center locally.
+The lab therefore uses **one lightweight VM with several logical legacy roles** rather than pretending to run a full multi-server enterprise data center locally.
 
-## Next session — exact starting point
+## Source-lab implementation completed so far
 
-1. Select/install the local hypervisor.
-2. Select a lightweight guest OS appropriate for the representative workload.
-3. Create one VM with conservative CPU/RAM/disk allocation.
-4. Install the representative MADAR application/database/file/batch components.
-5. Generate deterministic synthetic logistics data.
-6. Prove the source workload works.
-7. Capture the source baseline before designing the final AWS destination.
+### Hypervisor and VM
+
+- VMware Workstation Pro **26H1** installed and verified.
+- Representative VM created as `MADAR-LEGACY-01`.
+- Guest OS: **Ubuntu Server 24.04.4 LTS**.
+- VM allocation: **2 vCPU**, **2560 MB RAM**, **25 GB dynamically allocated virtual disk**.
+- Networking: **VMware NAT**.
+- Guest interface observed as `ens33` with DHCP address `192.168.14.128/24` during this session.
+
+### Guest baseline and remote administration
+
+- Hostname: `madar-legacy-01`.
+- Administrative lab user: `madaradmin`.
+- OpenSSH Server installed and verified active.
+- Remote SSH access from the Windows host verified successfully.
+- Post-reboot validation confirmed the VM booted cleanly and SSH remained active.
+
+### Storage correction
+
+Ubuntu's guided LVM layout initially exposed only about 11.5 GB to `/` even though the VM disk was 25 GB. The remaining space was available in the LVM volume group.
+
+The logical volume and ext4 filesystem were expanded to consume the remaining free LVM space. The root filesystem now reports approximately **23 GB**, with `VFree = 0` in `ubuntu-vg`.
+
+### Base OS patching
+
+- `apt update` completed.
+- `apt upgrade -y` completed.
+- Verification reported no immediately applicable package updates.
+- A guest reboot was performed when required.
+- Post-reboot health checks passed.
+
+### Runtime and database dependencies
+
+Installed and verified:
+
+- Python **3.12.3**,
+- pip **24.0**,
+- PostgreSQL **16.14**,
+- `postgresql-contrib`,
+- PostgreSQL systemd service: **active**.
+
+The PostgreSQL application database/user/schema have **not yet been created**. The shipment application has **not yet been deployed**.
+
+## Evidence captured during this milestone
+
+Screenshots captured locally using the agreed `madar-...` naming convention include:
+
+- `madar-legacy-vm-system-baseline.png`
+- `madar-legacy-vm-network-ssh.png`
+- `madar-lvm-storage-expanded.png`
+- `madar-base-os-patched.png`
+- `madar-post-reboot-validation.png`
+- `madar-runtime-postgresql-installed.png`
+
+These remain local evidence until intentionally added to the repository evidence structure.
+
+## Exact next action
+
+1. Enter PostgreSQL as the local `postgres` administration identity.
+2. Create the application database and least-purpose lab database role.
+3. Create the initial relational schema for customers, shipments, and shipment events.
+4. Install the Python application dependencies in an isolated virtual environment.
+5. Deploy the minimal shipment-management API/application.
+6. Create the operational-file area.
+7. Configure a scheduled/background job.
+8. Generate deterministic synthetic data and files.
+9. Prove read/write/background behavior.
+10. Capture row counts, aggregates, file counts, SHA-256 manifest, and source evidence.
+11. Create the pre-migration snapshot/backup point.
+12. Begin formal discovery and only then select the migration strategy and AWS target architecture.
 
 ## Important hold point
 
@@ -36,13 +99,9 @@ Therefore the lab will favor **one lightweight VM with several logical legacy ro
 
 The target architecture must be selected after discovery and assessment. Terraform scaffolding may be prepared, but cloud resources should not be created simply because a service seems useful.
 
-## Tomorrow's opening question
-
-> What exactly does the legacy workload depend on, and what evidence would make us confident enough to move it?
-
 ## Exit criteria for source-lab stage
 
-- VM boots reliably.
+- VM boots reliably. ✅
 - workload is reachable and functional.
 - database contains deterministic seed records.
 - operational files exist and can be checksummed.
@@ -53,4 +112,4 @@ The target architecture must be selected after discovery and assessment. Terrafo
 
 ## Blockers
 
-None currently. Hypervisor and guest OS still need to be selected/installed.
+None currently. The base VM, guest OS, networking, SSH, storage, patching, Python runtime, and PostgreSQL engine are ready. The next blocker would only arise if database/application setup fails or resource pressure exceeds the local host constraint.
