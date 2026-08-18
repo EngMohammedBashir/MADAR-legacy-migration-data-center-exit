@@ -1,10 +1,10 @@
 # Phase 03 Evidence Index
 
-Evidence should prove engineering claims, not merely show that AWS Console pages exist.
+Evidence proves engineering claims; screenshots are not collected merely for decoration.
 
 ## Source evidence captured locally
 
-The following focused screenshots have been captured during the source-lab build using the agreed `madar-...` naming convention:
+Earlier foundation/runtime evidence:
 
 ```text
 madar-legacy-vm-system-baseline.png
@@ -20,32 +20,49 @@ madar-deterministic-dataset-baseline.png
 madar-application-dashboard.png
 ```
 
-These currently remain local binary evidence until each image is reviewed for secrets, unrelated desktop information and image provenance before upload.
+Latest source-baseline/recoverability evidence:
 
-### What the current evidence proves
+```text
+madar-source-files-sha256-baseline.png
+madar-server-timezone-riyadh.png
+madar-cron-background-job-verified.png
+madar-application-write-path-verified.png
+madar-source-baseline-restored.png
+madar-pre-migration-db-backup-verified-v2.png
+madar-pre-migration-files-backup-verified.png
+```
 
-- representative VMware VM exists and is correctly identified,
-- Ubuntu guest resources and storage baseline were inspected,
-- SSH/network administration path works,
-- LVM root filesystem expansion persisted,
-- base OS patching/reboot succeeded,
-- Python/PostgreSQL runtime dependencies are installed,
-- PostgreSQL application role/database/schema exist,
-- isolated Python venv and PostgreSQL driver work,
-- PostgreSQL independently confirms the source dataset counts,
-- the real PostgreSQL-backed MADAR shipment dashboard is reachable and functional.
+If the combined `pre-migration-snapshot.sha256` manifest is executed and verified, capture:
 
-## Source evidence still required
+```text
+madar-final-pre-migration-snapshot.png
+```
 
-- corrected fully deterministic seed rerun proof,
-- application write-path proof,
-- deterministic operational files present,
-- source file count and total size,
-- SHA-256 source manifest,
-- scheduled/background job result,
-- representative database aggregates,
-- dependency/configuration inventory,
-- pre-migration snapshot/backup proof.
+Binary screenshots remain local until individually reviewed for credentials, unrelated desktop content and image provenance.
+
+## What the evidence now proves
+
+- representative VMware source VM and Ubuntu runtime exist,
+- network/SSH administration path works,
+- PostgreSQL and isolated Python runtime are functional,
+- deterministic database baseline is `10 / 50 / 150`,
+- real PostgreSQL-backed dashboard is reachable,
+- operational CSV files exist and baseline SHA-256 checks return `OK`,
+- server timezone is `Asia/Riyadh` with NTP active,
+- cron executed the report job without an interactive shell,
+- application PATCH write path updated a shipment and inserted a matching event transactionally,
+- deterministic seed restored the migration baseline after the controlled write test,
+- custom-format PostgreSQL backup can be inspected by `pg_restore --list`,
+- operational-file archive contents can be listed,
+- database/file backup integrity is protected with SHA-256 verification.
+
+## Evidence still required before target selection
+
+- representative source database aggregates,
+- compute/runtime/process/port inventory,
+- application/database/filesystem/job/identity/network dependency inventory,
+- dependency map,
+- assessment and migration-disposition evidence.
 
 ## Planned migration evidence
 
@@ -56,33 +73,9 @@ These currently remain local binary evidence until each image is reviewed for se
 - file checksum reconciliation,
 - target application functional test,
 - monitoring/security validation,
-- cutover decision,
-- rollback exercise/result,
+- cutover decision and rollback result,
 - controlled failure exercise if performed.
 
-## Planned closeout evidence
+## Quality and security rules
 
-- Terraform destroy summary,
-- residual-resource checks,
-- cost review result,
-- clean repository state.
-
-## Screenshot naming convention
-
-Use descriptive lowercase names prefixed with `madar-`, for example:
-
-```text
-madar-source-db-baseline.png
-madar-file-checksum-reconciliation.png
-madar-cutover-target-smoke-test.png
-```
-
-Avoid screenshots containing credentials, tokens, unnecessary account identifiers, email addresses, or unrelated desktop information.
-
-## Evidence quality rule
-
-Prefer command output or a focused screenshot that directly supports one claim. Ten decorative screenshots are weaker than three pieces of evidence that prove integrity, recovery and cleanup.
-
-## Integrity rule
-
-A screenshot is not accepted merely because the UI looks healthy. Where possible, pair visual application evidence with an independent source-of-truth check such as PostgreSQL counts, hashes, service state, or an HTTP health result.
+Prefer focused command output plus an independent source-of-truth check. Avoid screenshots containing credentials, tokens, unnecessary identifiers or unrelated desktop information. Never publish `.pgpass`, secret-bearing environment files, private keys, or local backup artifacts containing sensitive real data.
