@@ -7,7 +7,7 @@
 - [x] Business case documented.
 - [x] Source-estate model documented.
 - [x] Validation philosophy documented.
-- [ ] Link implementation repository from master transformation repository.
+- [x] Link implementation repository from master transformation repository.
 
 ## B — Local host preflight
 
@@ -15,24 +15,33 @@
 - [x] Hyper-V feature state checked.
 - [x] Local free storage checked.
 - [x] RAM/CPU constraints considered.
-- [ ] Install/select hypervisor.
-- [ ] Download/select guest OS.
-- [ ] Record hypervisor and guest versions.
+- [x] Install/select hypervisor. — VMware Workstation Pro 26H1.
+- [x] Download/select guest OS. — Ubuntu Server 24.04.4 LTS.
+- [x] Record hypervisor and guest versions.
 
 ## C — Representative legacy VM
 
-- [ ] Create VM.
-- [ ] Conservative CPU allocation.
-- [ ] Conservative RAM allocation.
-- [ ] Dynamically allocated disk.
-- [ ] Configure networking.
-- [ ] Patch/base-configure guest.
-- [ ] Install workload dependencies.
+- [x] Create VM. — `MADAR-LEGACY-01`.
+- [x] Conservative CPU allocation. — 2 vCPU.
+- [x] Conservative RAM allocation. — 2560 MB.
+- [x] Dynamically allocated disk. — 25 GB virtual disk.
+- [x] Configure networking. — VMware NAT; guest interface `ens33`.
+- [x] Patch/base-configure guest. — OS patched, rebooted, post-reboot validation passed.
+- [x] Install workload dependencies. — Python 3.12.3, pip 24.0, PostgreSQL 16.14 + contrib.
 - [ ] Install shipment application.
-- [ ] Install/configure database.
+- [ ] Install/configure database. — PostgreSQL engine installed and active; application database/role/schema still pending.
 - [ ] Create operational-file area.
 - [ ] Configure scheduled/background job.
 - [ ] Create pre-migration snapshot/backup.
+
+### Source-lab milestone evidence captured locally
+
+- `madar-legacy-vm-system-baseline.png`
+- `madar-legacy-vm-network-ssh.png`
+- `madar-lvm-storage-expanded.png`
+- `madar-base-os-patched.png`
+- `madar-post-reboot-validation.png`
+- `madar-runtime-postgresql-installed.png`
 
 ## D — Synthetic data & source proof
 
