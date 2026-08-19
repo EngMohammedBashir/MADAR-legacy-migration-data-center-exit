@@ -1,122 +1,126 @@
 # Target Architecture
 
-**Status: APPROVED FOR LAB EXECUTION — AWS PAID-RESOURCE WINDOW NOT STARTED**
+**Status: REHOST STAGING ACTIVE — AMI NOT YET CREATED**
 
 ## Design intent
 
-Phase 03 demonstrates a controlled data-center-exit migration rather than rebuilding a production three-tier platform. The target is intentionally right-sized for a short-lived lab and separates the logical workload components discovered on the legacy VM.
+Phase 03 demonstrates controlled data-center exit with a short-lived intermediate EC2 landing point followed by database/file replatforming. The lab is intentionally smaller than a production architecture, but security boundaries, rollback and evidence requirements remain explicit.
 
-## Approved target
+## Target flow
 
 ```text
-Representative VMware source                     AWS target (us-east-1)
-
-Ubuntu + Flask -------- AWS MGN ----------------> EC2 t3.small
-      |                                              |
-      | localhost DB today                          | RDS endpoint after cutover
-      v                                              v
-PostgreSQL 16 -------- AWS DMS Full Load + CDC --> RDS PostgreSQL
-
-Operational CSV/reports ---- validated copy ----> Amazon S3
-
-cron/report job ------------- reconfigure ------> target DB / target storage path
-
-Post-cutover protection ------------------------> AWS Backup where justified
+VMware MADAR-LEGACY-01
+        |
+        | stream-optimized VMDK
+        v
+Private S3 import bucket
+        |
+        | EC2 VM Import/Export / ImportImage
+        | IAM service role: vmimport
+        v
+AMI
+        |
+        v
+Temporary EC2 landing instance
+├── Ubuntu + Flask
+├── PostgreSQL (temporary intermediate source)
+└── operational files
+        |
+        +---- DMS Full Load + CDC ----> private RDS PostgreSQL
+        |
+        +---- validated copy ---------> Amazon S3
 ```
 
-## Network plan
+## Current import staging resources
+
+```text
+Region       us-east-1
+S3 bucket    madar-vm-import-197821101770
+Access       Block Public Access enabled
+IAM role     vmimport
+Trust        vmie.amazonaws.com / ExternalId vmimport
+Operator     mohammed-admin
+PassRole     policy simulation = allowed
+Artifact     MADAR-LEGACY-01-disk1.vmdk (~3.4 GiB compressed export)
+Capacity     25 GiB virtual disk
+Format       streamOptimized VMDK
+```
+
+The S3 bucket is a migration staging area, not the final application data architecture.
+
+## EC2 landing design
+
+The final instance type is selected only after `ImportImage` completes and the resulting AMI is known to be launchable under the current account plan. The preferred lab direction remains an eligible x86 burstable instance around the source's 2-vCPU / ~2.4-GiB footprint; `t3.small` is a candidate, not a promise.
+
+The landing instance is temporary. Its first job is to prove that the existing VMware machine image can boot and operate correctly on EC2. PostgreSQL then becomes the DMS source for the RDS replatform step.
+
+## Network direction
+
+The previously approved migration VPC direction remains:
 
 ```text
 VPC 10.30.0.0/16
 |
-+-- Public subnet A      10.30.1.0/24
-|   +-- temporary migrated EC2 application target
++-- application/landing subnet
+|   +-- imported EC2
 |
-+-- Private DB subnet A  10.30.11.0/24
-|
-+-- Private DB subnet B  10.30.12.0/24
++-- private DB subnet A 10.30.11.0/24
++-- private DB subnet B 10.30.12.0/24
     +-- RDS DB subnet group
 ```
 
-An Internet Gateway serves the public lab subnet. NAT Gateway and ALB are deliberately excluded because they do not contribute to the migration hypothesis being tested and would add cost/complexity to a one-instance temporary lab.
-
-The temporary public EC2 exposure is a lab simplification, not the recommended production end state. The production-oriented direction is private compute behind a controlled ingress tier.
+For a short-lived lab, the exact EC2 subnet/public-access mechanism is finalized at launch time after account-plan and management-access checks. A public application subnet may be used temporarily for proof, but it is explicitly not the recommended production end state.
 
 ## Security boundaries
 
-- EC2 application listener: TCP 8080, restricted to the operator/test source during the lab rather than open Internet access.
-- RDS PostgreSQL: TCP 5432, private; access limited to the migrated application security group and the required DMS migration path.
-- Target administration should use AWS Systems Manager Session Manager where practical rather than depending on inbound SSH.
-- PostgreSQL must never be exposed on `0.0.0.0/0` merely to make DMS work.
-- Secrets are not committed to Git.
+- import S3 bucket remains private,
+- VM Import/Export uses the `vmimport` service role instead of static credentials,
+- operator must be authorized to `iam:PassRole` to that role,
+- SSH, if required for the initial imported-instance validation, is restricted to the operator source and not `0.0.0.0/0`,
+- Flask TCP 8080 is exposed only for controlled validation,
+- PostgreSQL TCP 5432 is not opened to the Internet,
+- RDS remains private and accepts only approved application/DMS paths,
+- Session Manager is preferred for steady-state administration where practical,
+- VM images, database dumps and credentials are excluded from Git.
 
-## Resource sizing
+## Source-to-target compatibility controls
 
-| Resource | Lab selection | Reason |
-|---|---|---|
-| Region | `us-east-1` | Selected account/console region and low-cost lab target |
-| EC2 | `t3.small` candidate | 2 vCPU / 2 GiB, closer to the discovered 2 vCPU / 2.4 GiB source than a 1 GiB micro |
-| RDS PostgreSQL | small burstable class, Single-AZ; `db.t3.micro` candidate subject to console availability | Sufficient for the deterministic lab dataset; avoids Multi-AZ cost during migration proof |
-| DMS | smallest suitable replication capacity / Serverless option to be selected at execution | Full Load + CDC only for the migration window |
-| MGN | one source server | Rehost the Ubuntu/Flask runtime |
-| S3 | one migration bucket/prefix structure | Operational files and integrity evidence |
-| AWS Backup | post-cutover only where useful | Centralized target protection; not a replacement for the existing source `pg_dump`/config backup |
+Before export, the guest was prepared for the change in virtual hardware:
 
-Final purchasable sizes and prices are checked immediately before creation because service availability and pricing can change.
+| Area | Verified state |
+|---|---|
+| OS/arch | Ubuntu 24.04.4 / x86_64 |
+| Boot | BIOS + GRUB2 on GPT disk |
+| Root | LVM + ext4 |
+| Network driver | ENA present in kernel/initramfs |
+| Storage driver | NVMe present in kernel/initramfs |
+| Legacy block support | xen_blkfront available |
+| Interface naming | `eth0`, via `net.ifnames=0` |
+| Addressing | DHCP |
+| SSH | enabled + active |
+| PostgreSQL | enabled + active |
+| Failed services | 0 |
 
-## Connectivity finding
+## Database target
 
-The source PostgreSQL listener is currently loopback-only (`127.0.0.1:5432`) inside the VMware NAT network (`192.168.14.128/24`). A DMS replication resource in AWS cannot directly address that private VMware address without an explicit connectivity path.
+After EC2 acceptance:
 
-The source VM has verified outbound HTTPS reachability to AWS in `us-east-1`. A request to the MGN regional S3 endpoint reached AWS and returned HTTP 403, which is expected for an unauthenticated bucket request and proves network reachability rather than authorization.
+- RDS PostgreSQL uses a small burstable Single-AZ lab class selected at execution,
+- DMS uses minimum suitable capacity for Full Load + CDC,
+- DMS Premigration Assessment is run before CDC source changes,
+- `wal_level=replica` is intentionally preserved until that assessment records the readiness gap,
+- final application configuration points Flask to the RDS endpoint only after data/CDC validation.
 
-The exact temporary DMS source-connectivity mechanism remains an execution prerequisite. Publicly exposing PostgreSQL is rejected. A secure temporary tunnel or private connectivity design will be selected before DMS endpoint creation; Site-to-Site/Client VPN is not being created during preparation solely for the lab.
+## Cost guardrails
 
-## DMS / CDC readiness
+- no account-plan upgrade solely to make the lab pass,
+- no NAT Gateway or ALB unless a demonstrated requirement appears,
+- no Multi-AZ RDS for the short-lived proof,
+- create RDS/DMS only after the imported AMI/EC2 path succeeds,
+- remove VM-import staging objects and temporary images/snapshots when no longer required,
+- terminate temporary EC2 and DMS resources after acceptance/evidence,
+- record residual resources and actual cost/credit delta at closeout.
 
-Verified source checks:
+## Production direction vs lab direction
 
-```text
-PostgreSQL version          16.14
-wal_level                   replica   <-- expected pre-migration finding
-max_replication_slots       10
-max_wal_senders             10
-config file                 /etc/postgresql/16/main/postgresql.conf
-```
-
-`wal_level=replica` is intentionally left unchanged during preparation. During AWS execution, DMS Premigration Assessment should be used first so the readiness gap is recorded by the AWS-native assessment. The source can then be changed to logical replication configuration, reassessed, and only then used for Full Load + CDC.
-
-A safety copy of the PostgreSQL configuration exists at:
-
-```text
-/home/madaradmin/madar-backups/postgresql-16-main-before-dms
-```
-
-The earlier custom-format database dump remains the independent pre-migration data recovery point.
-
-## Cost guardrail
-
-The account currently uses the AWS Free Plan/credit model. Phase 03 will still treat credits as real money.
-
-Cost controls:
-
-- create paid migration resources only during the execution session,
-- target a roughly three-hour migration sprint where practical,
-- no NAT Gateway,
-- no ALB,
-- no Multi-AZ RDS for this lab,
-- stop/delete DMS as soon as CDC evidence and cutover are complete,
-- finalize/clean MGN resources after acceptance,
-- terminate temporary EC2 and delete unneeded EBS/RDS resources,
-- inspect Billing/Cost Explorer and residual resources at closeout.
-
-## AWS-native automation preference
-
-Before replacing a task with long manual command sequences, first evaluate an AWS-native assessment, agent or managed workflow. Use it when it meaningfully reduces toil and is affordable for the lab. Manual commands remain appropriate for source changes that AWS cannot safely perform automatically.
-
-Examples in this phase:
-
-- AWS DMS Premigration Assessment for database migration readiness,
-- AWS MGN agent/workflow for server rehosting,
-- AWS Backup after cutover where target protection adds value,
-- manual PostgreSQL configuration only for findings that require a source-side change.
+The lab accepts temporary simplifications to prove migration. A production-oriented target would normally add stronger ingress controls, private application compute, managed load balancing/HA as justified, central logging/monitoring, formal backup policy and tighter enterprise identity integration.
