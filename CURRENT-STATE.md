@@ -1,185 +1,157 @@
 # Phase 03 — Current State
 
-**Status: REHOST PATH PIVOTED — VM IMPORT/EXPORT PRE-FLIGHT IN PROGRESS**  
+**Status: VM IMPORT/EXPORT EXECUTION — VMDK UPLOAD IN PROGRESS**  
 **AWS account plan: Free Plan; no upgrade authorized**
 
-## Verified source estate
+## Source system
 
 ```text
 MADAR-LEGACY-01
 ├── Ubuntu Server 24.04.4 LTS
-├── Kernel 6.8.0-138-generic / x86_64
+├── kernel 6.8.0-138-generic / x86_64
 ├── 2 vCPU / ~2.4 GiB RAM
 ├── BIOS + GRUB2
-├── 25 GiB disk: /boot ext4 + LVM/ext4 root
+├── GPT 25 GiB disk
+│   ├── 1 MiB BIOS boot
+│   ├── 2 GiB ext4 /boot
+│   └── ~23 GiB LVM PV -> ubuntu-vg/ubuntu-lv -> ext4 /
 ├── PostgreSQL 16.14
-├── Flask 3.1.3 on port 8080
-├── Customers: 10
-├── Shipments: 50
-├── Shipment events: 150
-└── Verified DB/file/config backups
+├── Flask 3.1.3 / TCP 8080
+└── deterministic DB baseline 10 / 50 / 150
 ```
 
-## MGN execution result
+## Completed MGN experiment
 
-AWS Transform MGN replication was executed successfully against the VMware source:
+AWS Transform MGN successfully copied the source blocks (`25 / 25 GiB`, Healthy, Ready for testing). Test launch then failed before the target EC2 instance because MGN attempted to launch its service-managed conversion server as `m5.large`. CloudTrail recorded `Client.InvalidParameterCombination` because that instance type is not allowed by the account's Free Plan.
+
+AWS Transform confirmed that the conversion-server type is not customer-configurable. The project therefore did not upgrade the account or repeat replication. MGN source, replication EC2, EBS and residual base snapshot resources were cleaned.
+
+## VM Import/Export source preparation — complete
+
+The guest was prepared to reduce VMware-specific boot/network risk before image import:
+
+- ENA driver verified in kernel and initramfs,
+- NVMe driver verified in kernel and initramfs,
+- Xen block-front support verified,
+- `ens33` replaced by stable `eth0` naming using GRUB `net.ifnames=0`,
+- Netplan configured for DHCP on `eth0`,
+- reboot passed with `192.168.14.128/24`, default route, Internet and DNS,
+- SSH explicitly enabled at boot and active,
+- PostgreSQL enabled/active after reboot,
+- `madar_legacy` verified present,
+- GRUB installed/rechecked on `/dev/sda`,
+- kernel and initramfs boot artifacts verified,
+- `systemctl --failed` returned zero failed services,
+- filesystem verification returned zero errors.
+
+## Independent database recovery point
+
+Final logical backup:
 
 ```text
-VMware source
-   |
-   | AWS Replication Agent
-   v
-MGN staging
-├── 25 / 25 GiB replicated
-├── Initial replication finished
-├── Data replication status: Healthy
-└── Ready for testing
+/home/madaradmin/madar_legacy_final.dump
+Format             PostgreSQL CUSTOM
+Size               ~11 KiB compressed lab data
+Database           madar_legacy
+PostgreSQL         16.14
+TOC entries        27
+Representative     customers / shipments / shipment_events
+Validation         pg_restore -l succeeded
 ```
 
-The test launch then failed during the **conversion** stage, before the configured `t3.small` target instance was launched.
+The dump is intentionally not committed to Git.
 
-CloudTrail isolated the exact failing API call:
+## Clean VMware export — complete
+
+The first OVF export included the Ubuntu installer ISO because a virtual CD/DVD device was still attached. That artifact was rejected as the final migration image. The CD/DVD device was removed and a second clean export was created.
 
 ```text
-Service                  AWS Transform MGN
-Event                    ec2:RunInstances
-Role                     AWSApplicationMigrationConversionServerRole
-Resource                 AWS Application Migration Service Conversion Server
-Requested instance type  m5.large
-Result                   Client.InvalidParameterCombination
-Reason                   instance type not eligible for AWS Free Plan
+MADAR-LEGACY-01.ovf          13,475 bytes
+MADAR-LEGACY-01.mf              195 bytes
+MADAR-LEGACY-01-disk1.vmdk  3,629,074,432 bytes (~3.4 GiB)
+ISO                          absent
+VMDK OVF declaration         streamOptimized
+Virtual capacity             25 GiB
 ```
 
-This is distinct from both the configurable MGN replication server and the target EC2 launch template. AWS Transform confirmed that the conversion-server instance type is service-managed and cannot be overridden through a launch template, MGN launch setting, public API parameter, quota, or Transform workflow.
-
-Because upgrading the AWS account from Free Plan is outside this lab's cost/risk guardrails, **MGN test launch/cutover is not being retried**.
-
-## Cleanup completed
-
-The unsuccessful MGN execution was cleaned up deliberately:
-
-- source server disconnected and deleted from MGN,
-- MGN replication EC2 instance terminated,
-- residual MGN EBS resources removed,
-- residual MGN base snapshot removed,
-- no MGN source servers remain active.
-
-The CloudTrail and MGN launch-history evidence is retained as the root-cause record.
-
-## Revised rehost path
-
-The rehost track is now:
+Local path used for the clean export:
 
 ```text
-VMware MADAR-LEGACY-01
-      |
-      | Export OVA / supported VM image
-      v
-Amazon S3
-      |
-      | EC2 VM Import/Export (ImportImage)
-      v
-AMI
-      |
-      | launch Free-Plan-eligible x86 EC2 target
-      v
-EC2 test target
+C:\Users\SCAR\Documents\Virtual Machines\New folder\
 ```
 
-This removes the MGN-managed `m5.large` conversion-server dependency that blocked the previous path.
+## AWS VM Import/Export staging — active
 
-## VM Import/Export pre-flight completed
-
-The source VM has been prepared and validated before export:
-
-- Ubuntu `24.04.4 LTS` / kernel `6.8.0-138-generic` / `x86_64`,
-- BIOS boot with GRUB2,
-- ENA driver present in kernel and initramfs,
-- NVMe driver present in kernel and initramfs,
-- `xen_blkfront` built into the kernel,
-- predictable VMware NIC name changed from `ens33` to `eth0`,
-- GRUB now includes `net.ifnames=0`,
-- Netplan uses DHCP on `eth0`,
-- reboot validation passed: interface, DHCP, default route, Internet and DNS all healthy,
-- PostgreSQL starts successfully after reboot,
-- `madar_legacy` database remains present,
-- filesystem verification reports `0 parse errors, 0 errors`,
-- no failed systemd services,
-- root filesystem remains healthy on LVM/ext4.
-
-## Database safety baseline
-
-A final PostgreSQL custom-format dump was created and validated before export:
+Region:
 
 ```text
-Database            madar_legacy
-PostgreSQL          16.14
-Dump format         CUSTOM
-Archive TOC entries 27
-Representative tables
-├── public.customers
-├── public.shipments
-└── public.shipment_events
+us-east-1
 ```
 
-`pg_restore -l` successfully reads the archive. The dump remains outside Git.
-
-## Component migration strategy
+Private staging bucket created:
 
 ```text
-STAGE 1 — REHOST
-VMware MADAR-LEGACY-01
-      |
-      | VM Import/Export
-      v
-EC2: Ubuntu + Flask + PostgreSQL + files
-
-STAGE 2 — REPLATFORM DATABASE
-EC2 PostgreSQL
-      |
-      | AWS DMS Full Load + CDC
-      v
-RDS PostgreSQL
-
-STAGE 3 — REPLATFORM FILES
-Small operational CSV/reports
-      |
-      | validated transfer
-      v
-Amazon S3
+madar-vm-import-197821101770
 ```
 
-## Cost posture
+Public access is blocked.
 
-The AWS account remains on the **Free Plan**. No account upgrade is authorized for this lab. Any migration step must be checked end-to-end for hidden service-managed compute dependencies before execution.
-
-Guardrails:
-
-1. use only resources permitted by the current account plan,
-2. treat credits as real money,
-3. verify service-managed infrastructure before long-running transfers,
-4. create only resources needed for the current gate,
-5. capture evidence immediately,
-6. clean temporary resources after each experiment.
-
-## Exact next actions
+IAM service role created:
 
 ```text
-1. Preserve current VM state; no further MGN work
-2. Clean shutdown of MADAR-LEGACY-01
-3. Export VMware VM as supported OVA/image
-4. Validate exported artifact locally
-5. Re-check AWS VM Import/Export account prerequisites and IAM vmimport role
-6. Upload image to S3 in us-east-1
-7. Run ImportImage and monitor task to AMI availability
-8. Launch a Free-Plan-eligible x86 EC2 test instance
-9. Validate boot, eth0/DHCP, SSH and filesystem
-10. Validate PostgreSQL 16.14 + madar_legacy data
-11. Validate Flask read/write behavior and operational files
-12. Continue DMS -> RDS and files -> S3 tracks only after EC2 acceptance
-13. Capture cost/credit evidence and cleanup temporary resources
+Role                 vmimport
+Trusted service      vmie.amazonaws.com
+External ID          vmimport
+S3 scope             import bucket + objects
+EC2 scope            snapshot/image describe/register/copy operations needed by import
 ```
 
-## Current gate
+Operator authorization was tested with IAM policy simulation:
 
-**STOP before export/upload until the VMware image is produced and the VM Import/Export execution prerequisites are re-checked against the current Free Plan.**
+```text
+Principal   arn:aws:iam::197821101770:user/mohammed-admin
+Action      iam:PassRole
+Resource    arn:aws:iam::197821101770:role/vmimport
+Decision    allowed
+```
+
+## Current operation
+
+The clean VMDK upload has been started from local Windows PowerShell because AWS CloudShell cannot access `C:\Users\...` on the workstation:
+
+```powershell
+aws s3 cp "C:\Users\SCAR\Documents\Virtual Machines\New folder\MADAR-LEGACY-01-disk1.vmdk" `
+  "s3://madar-vm-import-197821101770/MADAR-LEGACY-01-disk1.vmdk" `
+  --region us-east-1
+```
+
+Observed upload progress at the time of this repository update:
+
+```text
+62.0 MiB / 3.4 GiB
+```
+
+**The repository does not claim the upload is complete yet.**
+
+## Next gate
+
+```text
+1. Wait for VMDK upload completion
+2. Verify object exists and size in S3
+3. Run EC2 ImportImage using the vmimport role
+4. Record ImportTaskId
+5. Monitor import task until completed or root-cause any failure
+6. Record resulting AMI ID
+7. Select an account-eligible x86 EC2 target
+8. Launch with controlled network/security settings
+9. Validate boot / eth0-DHCP / SSH / filesystems
+10. Validate PostgreSQL service + madar_legacy database
+11. Reconcile tables/data and Flask functionality
+12. Continue database replatform track: DMS -> RDS
+13. Continue operational-file replatform track: validated copy -> S3
+14. Capture cost/security/cleanup evidence
+```
+
+## Current stop rule
+
+Do not launch EC2 or create RDS/DMS resources until the `ImportImage` task produces a valid AMI. Do not report VM import success until the asynchronous import task actually completes.
