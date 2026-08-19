@@ -1,30 +1,35 @@
 # Phase 03 Evidence Index
 
-Evidence proves engineering claims; screenshots are not collected merely for decoration.
+Evidence exists to prove engineering claims. Screenshots are not collected as decoration, and planned evidence is not described as completed evidence.
 
-## Source evidence captured locally
+## Source baseline evidence
 
-Earlier foundation/runtime evidence:
+Existing local evidence proves:
+
+- representative VMware source exists,
+- Ubuntu runtime and storage baseline,
+- SSH/network administration,
+- PostgreSQL and application runtime,
+- deterministic `10 / 50 / 150` dataset,
+- Flask dashboard/read path,
+- transactional application write path,
+- scheduled Linux job behavior,
+- source file SHA-256 baseline,
+- restored deterministic migration baseline,
+- PostgreSQL custom-format backup readability,
+- operational-file backup integrity.
+
+Representative filenames retained locally include:
 
 ```text
 madar-legacy-vm-system-baseline.png
 madar-legacy-vm-network-ssh.png
 madar-lvm-storage-expanded.png
 madar-base-os-patched.png
-madar-post-reboot-validation.png
 madar-runtime-postgresql-installed.png
-madar-postgresql-database-role-created.png
-madar-postgresql-schema-created.png
-madar-python-venv-psycopg2-ready.png
 madar-deterministic-dataset-baseline.png
 madar-application-dashboard.png
-```
-
-Latest source-baseline/recoverability evidence:
-
-```text
 madar-source-files-sha256-baseline.png
-madar-server-timezone-riyadh.png
 madar-cron-background-job-verified.png
 madar-application-write-path-verified.png
 madar-source-baseline-restored.png
@@ -32,50 +37,114 @@ madar-pre-migration-db-backup-verified-v2.png
 madar-pre-migration-files-backup-verified.png
 ```
 
-If the combined `pre-migration-snapshot.sha256` manifest is executed and verified, capture:
+## MGN experiment evidence
+
+Evidence to retain/publish after review:
 
 ```text
-madar-final-pre-migration-snapshot.png
+MGN source server -> 25/25 GiB replicated
+MGN status -> Healthy / Ready for testing
+MGN launch history -> snapshot success / conversion failure
+CloudTrail RunInstances -> m5.large Conversion Server
+AWS Transform response -> conversion-server type not configurable
+EC2 -> replication server terminated
+MGN -> zero active source servers after cleanup
+EBS/Snapshot -> residual resources cleaned
 ```
 
-Binary screenshots remain local until individually reviewed for credentials, unrelated desktop content and image provenance.
+This evidence supports the ADR that the visible `t3.small` target was not the failing resource.
 
-## What the evidence now proves
+## VM Import/Export source-preparation evidence
 
-- representative VMware source VM and Ubuntu runtime exist,
-- network/SSH administration path works,
-- PostgreSQL and isolated Python runtime are functional,
-- deterministic database baseline is `10 / 50 / 150`,
-- real PostgreSQL-backed dashboard is reachable,
-- operational CSV files exist and baseline SHA-256 checks return `OK`,
-- server timezone is `Asia/Riyadh` with NTP active,
-- cron executed the report job without an interactive shell,
-- application PATCH write path updated a shipment and inserted a matching event transactionally,
-- deterministic seed restored the migration baseline after the controlled write test,
-- custom-format PostgreSQL backup can be inspected by `pg_restore --list`,
-- operational-file archive contents can be listed,
-- database/file backup integrity is protected with SHA-256 verification.
+Command output already observed and should be represented with focused, sanitized captures where useful:
 
-## Evidence still required before target selection
+```text
+OS/Kernel/Arch           Ubuntu 24.04.4 / 6.8.0-138 / x86_64
+Boot                     BIOS / GRUB2
+Disk                     GPT 25 GiB / ext4 + LVM
+ENA                      kernel + initramfs
+NVMe                     kernel + initramfs
+xen_blkfront             built in
+NIC after reboot         eth0 / DHCP / 192.168.14.128
+Default route            192.168.14.2
+Internet/DNS             pass
+SSH                      enabled + active
+PostgreSQL               enabled + active
+DB                       madar_legacy present
+Failed services          0
+Final DB dump            CUSTOM / pg_restore -l readable
+```
 
-- representative source database aggregates,
-- compute/runtime/process/port inventory,
-- application/database/filesystem/job/identity/network dependency inventory,
-- dependency map,
-- assessment and migration-disposition evidence.
+## VMware export evidence
 
-## Planned migration evidence
+The first OVF export contained an attached Ubuntu ISO and was intentionally rejected as the final migration artifact. After removing the virtual CD/DVD device, a clean export produced:
 
-- approved source/target architecture diagrams,
-- Terraform plan/apply summary,
-- migration/synchronization result,
-- database reconciliation,
-- file checksum reconciliation,
-- target application functional test,
-- monitoring/security validation,
-- cutover decision and rollback result,
-- controlled failure exercise if performed.
+```text
+MADAR-LEGACY-01.ovf          13,475 bytes
+MADAR-LEGACY-01.mf              195 bytes
+MADAR-LEGACY-01-disk1.vmdk  3,629,074,432 bytes
+ISO                          absent
+OVF VMDK format              streamOptimized
+```
+
+This is useful evidence of inspection rather than blindly uploading the first artifact.
+
+## AWS import-staging evidence
+
+Current proven AWS-side preparation:
+
+```text
+AWS identity            mohammed-admin
+Region                  us-east-1
+S3 bucket               madar-vm-import-197821101770
+S3 public access        blocked
+IAM role                vmimport
+Trusted service         vmie.amazonaws.com
+ExternalId              vmimport
+PassRole simulation     allowed
+VMDK upload             started; completion not yet claimed
+```
+
+## Evidence still required
+
+### VM Import/Export
+- completed S3 object + size,
+- ImportTaskId,
+- import status/progress,
+- final `completed` status,
+- AMI ID and snapshot ID(s),
+- any import failure message if encountered.
+
+### Imported EC2
+- instance/system checks,
+- boot and filesystem/LVM state,
+- target NIC/DHCP/routing,
+- SSH/management access,
+- PostgreSQL active,
+- DB/schema/row-count reconciliation,
+- Flask functional validation,
+- operational-file/job validation.
+
+### DMS/RDS
+- premigration assessment finding,
+- reassessment after CDC remediation,
+- Full Load completion,
+- CDC running,
+- controlled shipment/event replication proof,
+- final RDS reconciliation.
+
+### File/cutover/closeout
+- S3 file-integrity validation,
+- final cutover decision,
+- rollback proof where practical,
+- cleanup/residual-resource review,
+- actual cost/credit delta.
 
 ## Quality and security rules
 
-Prefer focused command output plus an independent source-of-truth check. Avoid screenshots containing credentials, tokens, unnecessary identifiers or unrelated desktop information. Never publish `.pgpass`, secret-bearing environment files, private keys, or local backup artifacts containing sensitive real data.
+- never publish credentials, tokens, `.pgpass`, `.env`, private keys or raw session credentials,
+- VM images and database backups remain outside Git,
+- review screenshots for account-sensitive identifiers and unrelated desktop content,
+- crop evidence to the engineering fact being demonstrated,
+- preserve failures and status messages when they explain a decision,
+- never mark a planned gate as passed merely because a command was started.
