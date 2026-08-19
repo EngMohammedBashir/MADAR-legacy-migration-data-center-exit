@@ -1,137 +1,174 @@
 # ADR-002 — Pivot from AWS Transform MGN to EC2 VM Import/Export under Free Plan constraints
 
-- **Status:** Accepted
+- **Status:** Accepted and in execution
 - **Date:** 2026-08-19
 - **Scope:** Phase 03 rehost track
 
 ## Context
 
-The initial rehost design used AWS Transform MGN to migrate the representative VMware server `MADAR-LEGACY-01` to EC2.
+The initial design used AWS Transform MGN to rehost `MADAR-LEGACY-01` from VMware to EC2.
 
-MGN agent installation and block-level replication succeeded. The source reached:
+MGN replication itself succeeded:
 
-- `25 / 25 GiB` replicated,
-- initial replication finished,
-- healthy replication state,
-- ready-for-testing lifecycle state.
+- 25 / 25 GiB replicated,
+- initial replication completed,
+- replication Healthy,
+- lifecycle Ready for testing.
 
-The target EC2 launch template was deliberately cost-optimized to `t3.small`, with right-sizing disabled so the selected instance type would be respected.
+The target launch template was deliberately set to `t3.small` with right-sizing disabled. During test launch, snapshot creation succeeded, then conversion failed before the target instance existed.
 
-During **Launch test instance**, snapshot creation succeeded but conversion failed before the target EC2 instance was launched.
-
-CloudTrail isolated the failing API request:
+CloudTrail isolated the failing request:
 
 ```text
 Event                    ec2:RunInstances
 Invoked by               mgn.amazonaws.com
-IAM instance profile     AWSApplicationMigrationConversionServerRole
-Resource tag             AWS Application Migration Service Conversion Server
+Profile                  AWSApplicationMigrationConversionServerRole
+Purpose                  AWS Application Migration Service Conversion Server
 Requested instance type  m5.large
-Error                    Client.InvalidParameterCombination
-Reason                   instance type not eligible for Free Tier
+Result                   Client.InvalidParameterCombination
+Reason                   instance type not eligible for AWS Free Plan
 ```
 
-AWS Transform subsequently confirmed that MGN has three distinct compute roles:
+AWS Transform confirmed three distinct compute roles:
 
-1. replication server — configurable,
-2. test/cutover target — configurable,
-3. conversion server — service-managed and not customer-configurable.
+```text
+Replication server       configurable
+Test/cutover target      configurable
+Conversion server        service-managed / not customer-configurable
+```
 
-The `m5.large` conversion server cannot be overridden through a target launch template, launch configuration, public MGN API parameter, quota, or AWS Transform workflow.
-
-The account is intentionally kept on the AWS **Free Plan**. Upgrading to Paid Plan solely to make a lab migration succeed violates the project's cost/risk guardrail.
+Changing the target instance type therefore cannot fix this failure.
 
 ## Decision
 
-Do **not** retry MGN test launch/cutover and do **not** upgrade the AWS account.
+Do not upgrade the account solely to make this lab pass, do not repeat successful block replication, and do not continue MGN test/cutover under the current Free Plan.
 
-Preserve the MGN execution as valid troubleshooting evidence, clean up its temporary resources, and pivot the rehost proof to **EC2 VM Import/Export**:
+Use **EC2 VM Import/Export** for Stage 1 rehost:
 
 ```text
 VMware VM
    |
-   | export OVA / supported image
+   | clean export
    v
-Amazon S3
+stream-optimized VMDK
    |
-   | EC2 ImportImage
+   | upload
+   v
+private S3 bucket
+   |
+   | VM Import/Export / ImportImage
+   | role = vmimport
    v
 AMI
    |
-   | launch Free-Plan-eligible x86 target
    v
-EC2 test target
+account-eligible x86 EC2 target
 ```
 
-The database and file replatform tracks remain separate:
+Database/file modernization remains separate:
 
-- PostgreSQL -> AWS DMS Full Load + CDC -> RDS PostgreSQL,
-- operational files -> validated transfer -> Amazon S3.
+- PostgreSQL -> DMS Full Load + CDC -> RDS PostgreSQL,
+- operational files -> validated copy -> S3.
 
-## Source remediation required for VM Import/Export
+## Implementation controls completed
 
-Before export, the VMware guest was prepared and validated for AWS compatibility:
+### Guest compatibility
 
-- Ubuntu `24.04.4 LTS`, kernel `6.8.0-138-generic`, `x86_64`,
+- Ubuntu 24.04.4 / kernel 6.8 / x86_64,
 - BIOS + GRUB2,
-- ENA driver verified in kernel and initramfs,
-- NVMe driver verified in kernel and initramfs,
-- Xen block-front driver built into the kernel,
-- NIC naming changed from VMware-style `ens33` to `eth0`,
-- GRUB updated with `net.ifnames=0`,
-- Netplan updated to DHCP on `eth0`,
-- reboot validation confirmed networking, Internet, DNS and PostgreSQL health,
-- final PostgreSQL custom-format dump created and validated with `pg_restore -l`.
+- GPT + LVM/ext4,
+- ENA and NVMe in kernel/initramfs,
+- Xen block support,
+- `ens33` -> `eth0`,
+- GRUB `net.ifnames=0`,
+- Netplan DHCP on `eth0`,
+- reboot/route/Internet/DNS validation,
+- SSH enabled at boot,
+- PostgreSQL enabled/active,
+- final PostgreSQL dump validated.
+
+### VMware artifact hygiene
+
+The first export contained the attached Ubuntu ISO. It was rejected as the migration artifact. The virtual CD/DVD device was removed and a second clean export produced OVF/MF/VMDK only.
+
+The OVF declares the VMDK as `streamOptimized`.
+
+### AWS permission boundary
+
+Created private import bucket:
+
+```text
+madar-vm-import-197821101770
+```
+
+Created service role:
+
+```text
+vmimport
+Trust: vmie.amazonaws.com
+ExternalId: vmimport
+```
+
+Attached narrowly scoped S3 read and EC2 image/snapshot permissions. IAM simulation confirmed the operator may `iam:PassRole` the role:
+
+```text
+Decision: allowed
+```
+
+The local VMDK upload to S3 has started; completion is intentionally not claimed until the copy finishes and the object is verified.
 
 ## Consequences
 
 ### Positive
 
-- avoids a hard Free Plan blocker outside customer control,
-- preserves account-plan safety and avoids exposing a payment method to unexpected non-free resources,
-- keeps the migration proof technically authentic,
-- turns the MGN failure into a documented root-cause and cost-governance case,
-- continues toward a full-machine rehost rather than replacing the VM with a fresh installation.
+- avoids a hard managed-compute blocker outside customer control,
+- preserves the Free Plan/account-risk constraint,
+- still demonstrates migration of the existing VMware machine image,
+- produces a strong real-world troubleshooting and architecture-decision story,
+- makes IAM service-role/PassRole boundaries explicit,
+- preserves the original VMware VM as rollback anchor.
 
 ### Negative
 
-- VM Import/Export requires a powered-off export window,
-- the VM image must be uploaded to S3 before import,
-- additional local source preparation is required,
-- the final EC2 target will not benefit from MGN continuous replication/cutover orchestration.
+- requires a powered-off/export window,
+- requires a multi-GB upload before conversion,
+- lacks MGN continuous replication/cutover orchestration,
+- requires explicit guest compatibility preparation and post-import validation,
+- import is asynchronous and may expose image-format/boot issues that must be diagnosed separately.
 
-## Alternatives considered
+## Alternatives rejected
 
-### Upgrade AWS account to Paid Plan
+### Upgrade to Paid Plan
 
-Rejected. It would allow the managed `m5.large` conversion server to run, but the project explicitly avoids upgrading the account solely to bypass a lab constraint.
+Rejected as a lab-governance decision. It may remove the MGN Free Plan enforcement boundary, but the project does not alter billing risk merely to make a portfolio path look successful.
 
-### Change MGN target instance type
+### Retry MGN with a different target instance
 
-Rejected as ineffective. The failure happens on the service-managed conversion server before the configured target instance is launched.
+Rejected. The service-managed conversion server, not the target, failed.
 
-### Retry MGN replication
+### Fresh Ubuntu EC2 rebuild
 
-Rejected. Replication had already succeeded and was not the root cause.
+Rejected as the primary rehost proof because it would demonstrate rebuild/redeploy rather than migration of the existing VM image.
 
-### Rebuild a fresh Ubuntu EC2 instance manually
+### Direct DMS from VMware
 
-Rejected as the primary rehost proof because it would no longer demonstrate migration of the existing VMware machine image.
+Rejected for this lab because PostgreSQL is loopback-only behind VMware NAT; the EC2 landing point makes the later DMS source much cleaner.
 
 ## Evidence
 
-The authoritative evidence for this decision is retained outside sensitive/raw credential material and includes:
+Authoritative evidence includes:
 
-- MGN replication healthy/ready-for-testing state,
-- MGN launch job showing snapshot success and conversion failure,
-- CloudTrail `RunInstances` event showing `m5.large`,
-- AWS Transform confirmation that the conversion-server instance type is not configurable,
-- cleanup proof for the MGN replication instance and storage resources.
+- MGN healthy/ready replication state,
+- MGN launch history showing snapshot success then conversion failure,
+- CloudTrail `RunInstances` showing `m5.large`,
+- AWS Transform explanation of the non-configurable conversion server,
+- MGN cleanup state,
+- driver/boot/network preflight results,
+- clean VMware export file list and OVF `streamOptimized` declaration,
+- S3 bucket/IAM role configuration,
+- `iam:PassRole` simulation = `allowed`,
+- subsequent ImportImage/AMI/EC2 evidence when execution completes.
 
 ## Review trigger
 
-Revisit this ADR only if one of the following changes:
-
-- AWS exposes a supported conversion-server instance-type control,
-- the account plan intentionally changes,
-- VM Import/Export introduces a new blocker that invalidates the fallback path.
+Revisit this ADR only if the account plan intentionally changes, AWS exposes a supported MGN conversion-server control, or VM Import/Export proves technically invalid for this source image.
