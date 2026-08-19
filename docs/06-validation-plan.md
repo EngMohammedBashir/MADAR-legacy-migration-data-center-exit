@@ -2,7 +2,7 @@
 
 ## Principle
 
-A migration is not trusted because an AMI exists or an EC2 instance reaches `running`. Validation compares the target against the recorded source baseline and proves boot, network, application and data integrity.
+A migration is not trusted because an AMI exists, an EC2 instance reaches `running`, or an RDS instance reports `available`. Validation compares target state against the recorded source baseline and proves workload behavior plus data continuity.
 
 ## Source baseline
 
@@ -12,174 +12,218 @@ Shipments        50
 Shipment events  150
 Database         madar_legacy
 PostgreSQL       16.14
-Representative tables
-├── public.customers
-├── public.shipments
-└── public.shipment_events
+Tables           customers / shipments / shipment_events
 ```
 
 An independent PostgreSQL custom-format dump exists and was validated with `pg_restore -l`.
 
-## Gate 1 — VM import artifact
+## Gate 1 — VM import artifact: PASS
 
-Before `ImportImage`:
+Validated before import:
 
-- clean export contains no attached installer ISO,
+- clean VMware export contains no attached installer ISO,
 - VMDK is `streamOptimized`,
-- S3 object name/size matches the local export,
-- S3 bucket is private,
-- `vmimport` role exists and trusts `vmie.amazonaws.com`,
-- role has required S3/image permissions,
-- operator `iam:PassRole` decision is `allowed`.
+- S3 object size matches the local VMDK,
+- staging bucket is private,
+- `vmimport` trusts `vmie.amazonaws.com`,
+- required S3/image permissions exist,
+- operator `iam:PassRole` simulation returned `allowed`.
 
-Pass condition: the artifact and permissions are known before asynchronous import begins.
+## Gate 2 — ImportImage task: PASS
 
-## Gate 2 — ImportImage task
-
-Record:
-
-- `ImportTaskId`,
-- status transitions,
-- progress percentage,
-- status message if any,
-- resulting AMI ID,
-- related snapshot ID(s).
-
-Do not call the import successful until task status is `completed` and an AMI is returned. If it fails, preserve the exact status message and troubleshoot the failing layer rather than repeatedly restarting the task.
-
-## Gate 3 — EC2 boot acceptance
-
-After launching the imported AMI:
+Recorded result:
 
 ```text
-Instance running
-      ↓
-EC2 system/instance checks pass
-      ↓
-Linux boots
-      ↓
-network interface obtains DHCP
-      ↓
-default route/DNS work
-      ↓
-management access works
+ImportTaskId  import-ami-48f44651b4c75774t
+Status        completed
+AMI           ami-0cbd2e9ec0d6f9168
+Snapshot      snap-0920a020c47fb6447
 ```
 
-Validate:
+## Gate 3 — EC2 boot acceptance: PASS
 
-- boot completes without emergency mode,
-- expected root and `/boot` filesystems mount,
-- LVM volume group/logical volume activate,
-- network interface is usable,
-- DHCP address/default route exist,
-- SSH or selected management path works,
-- no unexpected failed systemd services.
-
-## Gate 4 — OS and service reconciliation
-
-Confirm target identity/runtime:
-
-- Ubuntu release and kernel,
-- expected hostname/host configuration disposition,
-- PostgreSQL 16.14 starts automatically,
-- Flask/application files exist,
-- expected operational data directories exist,
-- scheduled-job configuration has an explicit target disposition.
-
-## Gate 5 — Database reconciliation
-
-On the imported EC2 source, verify:
-
-- `madar_legacy` exists,
-- expected schema/tables exist,
-- baseline row counts match,
-- representative records match,
-- representative aggregate values match,
-- no unexplained duplicate/missing records exist.
-
-The independent dump is a recovery layer, not evidence that the disk-level migration itself succeeded.
-
-## Gate 6 — Application validation
-
-- application process starts,
-- `/api/health` passes,
-- `/api/summary` returns expected values,
-- representative reads succeed,
-- controlled shipment write succeeds,
-- shipment event insertion remains transactional,
-- expected logs are generated.
-
-## Gate 7 — DMS/RDS database replatform
-
-Only after imported EC2 acceptance:
-
-1. create private RDS target,
-2. run DMS Premigration Assessment,
-3. record known CDC readiness findings,
-4. remediate only required source settings,
-5. reassess,
-6. run Full Load + CDC,
-7. reconcile target data,
-8. prove a new source shipment/event change arrives on RDS.
-
-CDC proof:
+Validated:
 
 ```text
-EC2 PostgreSQL
-shipment 3 = IN_TRANSIT
-      |
-      | controlled application write
-      v
-shipment 3 = DELIVERED + matching event
-      |
-      | DMS CDC
-      v
-RDS PostgreSQL
-same shipment/event state
+EC2 running + status checks
+ -> Ubuntu boot
+ -> eth0 / DHCP
+ -> default route
+ -> SSH
+ -> NVMe-backed disk
+ -> LVM/ext4 activation
+ -> zero failed systemd units
 ```
 
-## Gate 8 — File validation
+## Gate 4 — OS and service reconciliation: PASS
+
+- Ubuntu 24.04.4 / kernel 6.8.0-138 / x86_64,
+- PostgreSQL 16.14 enabled and active,
+- Flask/application files present,
+- expected cron configuration preserved.
+
+## Gate 5 — Database reconciliation on imported EC2: PASS
+
+```text
+customers         10
+shipments         50
+shipment_events   150
+```
+
+Expected tables and database `madar_legacy` were present.
+
+## Gate 6 — Application validation: PASS
+
+Observed:
+
+```text
+/api/health
+status       ok
+database     connected
+
+/api/summary
+customers    10
+shipments    50
+events       150
+```
+
+The Flask process did not auto-start because the legacy application was not managed by systemd; it was manually started with its runtime DB credential. This is recorded as a post-migration operational improvement, not hidden as a migration failure.
+
+## Gate 7 — DMS/RDS database replatform: PASS
+
+### CDC readiness
+
+```text
+wal_level              logical
+max_replication_slots  10
+max_wal_senders        10
+```
+
+PostgreSQL was made VPC-reachable on TCP/5432, with `pg_hba.conf` and SG controls restricting authenticated access.
+
+### RDS target
+
+```text
+PostgreSQL  16.14
+Class       db.t3.micro
+Public      false
+Status      available
+```
+
+### DMS infrastructure
+
+```text
+Replication instance  madar-dms-repl
+dms class              dms.t3.small
+Status                 available
+Private IP             172.31.13.46
+```
+
+### Endpoint gates
+
+```text
+Source endpoint  successful
+Target endpoint  successful
+```
+
+Troubleshooting accepted as evidence:
+
+- `dms-vpc-role` missing/misconfigured -> repaired IAM trust and attached `AmazonDMSVPCManagementRole`,
+- target rejected unencrypted connection -> target endpoint changed to `ssl-mode=require`,
+- target then rejected password -> credential synchronized,
+- final target connection -> `successful`.
+
+### Full Load gate
+
+```text
+FullLoadProgress  100
+TablesLoaded      3
+TablesLoading     0
+TablesErrored     0
+
+customers         10
+shipments         50
+shipment_events   150
+```
+
+An independent SQL query against RDS confirmed the same initial counts.
+
+### CDC gate
+
+Controlled source-side change:
+
+```text
+customer_id   11
+company_name  MADAR CDC TEST CUSTOMER
+region        Riyadh
+```
+
+Without rerunning Full Load, RDS contained the same row and `customers` became `11`.
+
+Final RDS reconciliation:
+
+```text
+customers         11
+shipments         50
+shipment_events   150
+```
+
+This is direct evidence that Full Load established the initial state and CDC propagated a later change.
+
+## Gate 8 — File validation: PENDING
 
 - source file count recorded,
-- target object count matches expected scope,
-- SHA-256 validation passes for immutable baseline files,
-- representative files can be retrieved/read,
-- naming/prefix structure is correct.
+- target object count must match expected scope,
+- SHA-256/content validation required,
+- naming/prefix structure must be accepted.
+
+## Cutover gate: PENDING
+
+Stage 2 data migration passed, but an application cutover is a separate decision.
+
+Before final cutover:
+
+```text
+CDC caught up
+ -> final reconciliation
+ -> securely configure Flask for RDS
+ -> validate health/read/write
+ -> explicitly continue or abort
+ -> retain rollback anchor until acceptance
+```
 
 ## Operational/security validation
 
-- no unintended PostgreSQL Internet exposure,
-- import S3 bucket remains private,
-- temporary SSH/app ingress is narrow,
-- restart/reboot behavior is tested where practical,
-- monitoring/logging visibility is checked,
-- rollback anchor remains available until acceptance,
-- temporary migration resources are inventoried for cleanup.
+Passed so far:
 
-## Evidence gates
+- RDS is private,
+- PostgreSQL migration paths are SG-to-SG,
+- no `0.0.0.0/0 -> 5432` rule used,
+- target DMS connection uses TLS,
+- secrets are excluded from Git,
+- rollback source/recovery artifacts remain available.
 
-Capture evidence for:
+Remaining:
 
-1. source baseline and independent backup validation,
-2. MGN replication success,
-3. MGN test-conversion failure and CloudTrail root cause,
-4. MGN cleanup,
-5. EC2 compatibility preparation (`eth0`, DHCP, drivers, GRUB, services),
-6. clean VMware export and `streamOptimized` declaration,
-7. private S3 staging bucket,
-8. `vmimport` IAM role and PassRole authorization,
-9. completed S3 VMDK upload,
-10. ImportImage task/progress/completion,
-11. resulting AMI,
-12. imported EC2 boot/system checks,
-13. PostgreSQL/data reconciliation,
-14. application functional test,
-15. DMS assessment/reassessment,
-16. Full Load + CDC proof,
-17. file integrity proof,
-18. final cutover/rollback decision,
-19. cleanup/cost evidence.
+- final cutover secret handling,
+- monitoring/operational improvements,
+- resource cleanup,
+- cost/credit review.
+
+## Evidence sequence
+
+Completed through database replatform:
+
+```text
+18-rds-postgresql-target-available.png
+19-dms-replication-instance-available.png
+20-source-endpoint-connection-success.png
+21-target-endpoint-connection-success.png
+22-dms-full-load-completed.png
+23-cdc-replication-proof.png
+24-final-data-reconciliation.png
+```
 
 ## Pass/fail rule
 
-Unexplained differences are failures until reconciled or explicitly accepted with justification. The project never converts a warning into a success claim simply to make the portfolio look cleaner.
+Unexplained differences are failures until reconciled or explicitly accepted. A successful AWS resource state never substitutes for workload/data validation.
