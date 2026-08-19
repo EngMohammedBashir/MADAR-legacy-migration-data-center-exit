@@ -2,75 +2,57 @@
 
 ## Phase 03 of the MADAR Cloud Transformation
 
-MADAR Logistics & Digital Operations has a representative legacy shipment-management workload hosted on VMware. This phase demonstrates how a cloud engineer discovers, protects, migrates, validates, troubleshoots and modernizes that workload without pretending that migration is merely "launch an EC2 instance".
+MADAR Logistics & Digital Operations has a representative legacy shipment-management workload hosted on VMware. This phase demonstrates a controlled data-center-exit workflow: discover the source, protect recoverability, troubleshoot a blocked migration path, rehost the machine into AWS, validate business state, then replatform PostgreSQL to a managed database with low-downtime replication.
 
 > MADAR is fictional. The workload, commands, failures, AWS behavior, troubleshooting and evidence are technically authentic lab work.
 
 ## Executive summary
 
-The source is a VMware VM running Ubuntu 24.04, Flask and PostgreSQL. The original server-rehost plan used AWS Transform MGN. Block-level replication completed successfully, but the MGN test launch failed because the service-managed conversion stage attempted to launch an `m5.large`, which the account's AWS Free Plan rejects. CloudTrail isolated the exact `RunInstances` failure and AWS Transform confirmed that the conversion-server type is not customer-configurable.
+The source VMware VM runs Ubuntu 24.04.4, Flask and PostgreSQL 16.14. The original rehost path used AWS Transform / Application Migration Service (MGN). Block replication reached 25/25 GiB and Ready for testing, but the service-managed conversion stage attempted an `m5.large`, which the account's Free Plan rejected. CloudTrail isolated the failing `RunInstances` request and AWS Transform confirmed that conversion-server sizing was not customer-configurable.
 
-Rather than upgrading the account simply to force the lab through, the project changed the rehost mechanism to **EC2 VM Import/Export** while preserving the same engineering objective: migrate the existing VMware machine image into AWS.
+The project therefore pivoted to **EC2 VM Import/Export** rather than upgrading the account merely to force the lab through. That fallback is now complete: the clean VMware VMDK was staged in private S3, imported into an AMI, launched as EC2, and validated successfully.
 
-Current state:
+The project is now executing **database replatforming from EC2 PostgreSQL to Amazon RDS for PostgreSQL using AWS DMS Full Load + CDC**.
 
-```text
-VMware MADAR-LEGACY-01
-├── Ubuntu Server 24.04.4 LTS / kernel 6.8.0-138 / x86_64
-├── BIOS + GRUB2
-├── 2 vCPU / ~2.4 GiB RAM
-├── 25 GiB GPT disk: /boot ext4 + LVM/ext4 root
-├── Flask 3.1.3 / TCP 8080
-├── PostgreSQL 16.14 / madar_legacy
-├── deterministic baseline: 10 customers / 50 shipments / 150 events
-└── verified PostgreSQL + file/config recovery artifacts
-
-Rehost execution
-├── MGN block replication: SUCCESS
-├── MGN test conversion: BLOCKED by managed m5.large / Free Plan
-├── MGN resources: CLEANED
-├── EC2 compatibility preparation: COMPLETE
-├── clean VMware OVF/VMDK export: COMPLETE
-├── VMDK format: streamOptimized
-├── S3 staging bucket: CREATED / private
-├── IAM service role `vmimport`: CREATED
-├── iam:PassRole simulation: ALLOWED
-└── VMDK upload to S3: IN PROGRESS
-```
-
-## Architecture and migration strategy
+## Current architecture
 
 ```text
-STAGE 1 — REHOST
+STAGE 1 — REHOST (COMPLETE)
 
 VMware MADAR-LEGACY-01
         |
-        | clean VMware export
+        | clean streamOptimized VMDK
         v
-stream-optimized VMDK
+private Amazon S3 staging
         |
-        | aws s3 cp
+        | EC2 VM Import/Export
         v
-private Amazon S3 staging bucket
+AMI ami-0cbd2e9ec0d6f9168
         |
-        | EC2 VM Import/Export / ImportImage
-        | assumes IAM role: vmimport
         v
-AMI
+EC2 i-051336c5f304a5319 / t3.small
+Ubuntu + Flask + PostgreSQL 16.14
+private IP 172.31.3.142
         |
-        | launch accepted x86 target
+        | validated: boot/network/filesystem/DB/app
         v
-EC2: Ubuntu + Flask + PostgreSQL + files
+baseline preserved: 10 customers / 50 shipments / 150 events
 
-STAGE 2 — DATABASE REPLATFORM
+STAGE 2 — DATABASE REPLATFORM (IN PROGRESS)
 
-EC2 PostgreSQL
+EC2 PostgreSQL 16.14
         |
-        | AWS DMS Full Load + CDC
+        | TCP 5432 restricted to DMS SG
         v
-Amazon RDS for PostgreSQL
+AWS DMS replication instance
+madar-dms-repl / dms.t3.small
+        |
+        | Full Load + CDC
+        v
+Amazon RDS PostgreSQL 16.14
+madar-postgres-target / db.t3.micro / private
 
-STAGE 3 — FILE REPLATFORM
+STAGE 3 — FILE REPLATFORM (NEXT)
 
 Operational CSV/reports
         |
@@ -79,25 +61,90 @@ Operational CSV/reports
 Amazon S3
 ```
 
-The strategy deliberately separates **machine rehosting** from **database replatforming**. VM Import/Export moves the server image; DMS later moves PostgreSQL into managed RDS. One service is not misrepresented as solving both problems.
+## Rehost result
 
-## Why the MGN failure matters
-
-The strongest engineering lesson in this phase came from a path that did not complete.
-
-MGN reached `25 / 25 GiB`, `Initial replication finished`, `Healthy`, and `Ready for testing`. The configured target launch template used `t3.small`, but test launch still failed. CloudTrail showed why:
+VM Import/Export completed successfully:
 
 ```text
-Caller / service        mgn.amazonaws.com
-API                     ec2:RunInstances
-Purpose                 AWS Application Migration Service Conversion Server
-IAM profile             AWSApplicationMigrationConversionServerRole
-Requested type          m5.large
-Result                  Client.InvalidParameterCombination
-Reason                  instance type is not eligible for AWS Free Plan
+Import task    import-ami-48f44651b4c75774t
+AMI            ami-0cbd2e9ec0d6f9168
+Snapshot       snap-0920a020c47fb6447
+Architecture   x86_64
+Virtualization HVM
+ENA            enabled
+Root           25 GiB EBS
 ```
 
-This distinguished three different compute roles:
+The imported AMI was launched as `MADAR-LEGACY-EC2` (`i-051336c5f304a5319`) using `t3.small` in the lab VPC. SSH succeeded and the migrated host preserved the expected Linux storage layout and application/database state.
+
+Validation after rehost:
+
+- Ubuntu 24.04.4 booted on AWS.
+- `eth0` obtained VPC DHCP configuration.
+- SSH administration succeeded.
+- LVM/ext4 filesystems mounted correctly.
+- PostgreSQL 16.14 was enabled and active.
+- `madar_legacy` existed with the expected schema.
+- Counts reconciled to **10 customers / 50 shipments / 150 shipment events**.
+- zero failed systemd units were reported.
+- Flask health returned database connected after loading the application credential into the runtime environment.
+
+This distinction matters: **an AMI reaching `available` was not treated as migration success; the workload itself had to prove it still worked.**
+
+## Database replatform design
+
+The source PostgreSQL instance was prepared for logical change replication:
+
+```text
+wal_level              logical
+max_replication_slots  10
+max_wal_senders        10
+```
+
+A dedicated DMS database principal was created and private-VPC PostgreSQL connectivity was tested. Credentials are intentionally excluded from Git.
+
+Network access is SG-to-SG rather than Internet-wide:
+
+```text
+DMS SG  sg-085569e2731850c8a
+   |-- TCP/5432 --> source EC2 SG sg-0589383abcc3ebbbc
+   `-- TCP/5432 --> target RDS SG sg-093756a8cabaad407
+```
+
+The RDS target is already available:
+
+```text
+Identifier  madar-postgres-target
+Engine      PostgreSQL 16.14
+Class       db.t3.micro
+Storage     20 GiB gp3
+Public      false
+Endpoint    madar-postgres-target.cgx64cygc3mj.us-east-1.rds.amazonaws.com
+```
+
+The DMS replication subnet group spans `us-east-1a` and `us-east-1b` and reports `Complete`. The replication instance `madar-dms-repl` uses `dms.t3.small`, DMS engine 3.6.1, private networking, and was last observed provisioning. The repository will not claim it is available until AWS reports that state.
+
+## A useful DMS failure and its resolution
+
+The first `CreateReplicationSubnetGroup` request failed with an IAM error stating that `dms-vpc-role` was not configured properly.
+
+Rather than changing subnets or opening network access, the prerequisite was fixed at the correct layer:
+
+```text
+AWS DMS
+   |
+   | sts:AssumeRole
+   v
+dms-vpc-role
+   |
+   `-- AmazonDMSVPCManagementRole
+```
+
+After configuring trust for `dms.amazonaws.com` and attaching the AWS-managed VPC management policy, the same subnet-group request succeeded. This is retained as evidence of distinguishing **IAM control-plane failure** from **data-plane network failure**.
+
+## Why the earlier MGN failure matters
+
+MGN itself successfully replicated the source blocks. The failure happened later in a different compute role:
 
 ```text
 MGN replication server     configurable
@@ -105,164 +152,98 @@ MGN target EC2             configurable
 MGN conversion server      service-managed; not customer-configurable
 ```
 
-The target `t3.small` was therefore never the failing resource. The experiment was stopped, documented and cleaned rather than repeatedly retried.
+CloudTrail showed the conversion server requesting `m5.large`; the account rejected that instance type under its plan. The target `t3.small` was therefore not the failing resource. MGN resources were cleaned and the migration strategy was deliberately changed.
 
 See `decisions/ADR-002-mgn-free-plan-blocker-and-vm-import-fallback.md`.
 
-## EC2 compatibility work performed before export
+## Engineering decisions demonstrated
 
-Moving a disk image between hypervisors is similar to moving an engine into a different vehicle: the application can be healthy while boot, storage or network assumptions still prevent startup on the new platform.
+- preserve an independent PostgreSQL recovery artifact before migration,
+- validate hypervisor-to-EC2 boot, ENA/NVMe, GRUB and network compatibility before export,
+- use private S3 staging and an IAM service role for VM Import/Export,
+- diagnose managed-service failures using CloudTrail rather than repeated retries,
+- keep source and target PostgreSQL on the same major/minor version for this lab migration,
+- use a private RDS target rather than exposing the database publicly,
+- restrict PostgreSQL migration traffic to the DMS security group,
+- enable PostgreSQL logical replication before CDC,
+- separate rehost success from database replatform success,
+- use deterministic row counts and a controlled CDC change as acceptance evidence,
+- treat temporary migration infrastructure and AWS credits as real operational cost.
 
-The source was therefore validated and prepared before export:
+## Evidence checkpoints
 
-- verified Ubuntu `24.04.4`, `x86_64`, BIOS and GRUB2,
-- verified GPT layout and LVM/ext4 root filesystem,
-- reinstalled/rechecked GRUB on `/dev/sda`,
-- verified ENA driver in the kernel and initramfs,
-- verified NVMe driver in the kernel and initramfs,
-- verified Xen block-front support,
-- changed predictable VMware NIC naming from `ens33` to `eth0`,
-- set GRUB `net.ifnames=0`,
-- configured Netplan DHCP on `eth0`,
-- rebooted and revalidated IP, route, Internet and DNS,
-- enabled SSH at boot and verified it active,
-- verified PostgreSQL enabled/active after reboot,
-- verified `madar_legacy` remained available,
-- verified no failed systemd services,
-- verified filesystem/fstab state,
-- created a final PostgreSQL custom-format dump and validated its table-of-contents with `pg_restore -l`.
-
-The final VMware export was repeated after removing the attached installation ISO. The clean artifact contains only the OVF manifest and VM disk; the VMDK advertises `streamOptimized` format.
-
-## AWS-side import preparation
-
-The import staging layer is intentionally narrow and private:
+The evidence set is intentionally sequential. The latest completed checkpoint is:
 
 ```text
-S3 bucket
-madar-vm-import-197821101770
-├── public access blocked
-└── destination for MADAR-LEGACY-01-disk1.vmdk
-
-IAM role
-vmimport
-├── trusted service: vmie.amazonaws.com
-├── external ID: vmimport
-├── S3 read permissions for the import bucket
-└── EC2 snapshot/image permissions required by VM Import/Export
-
-Operator
-mohammed-admin
-└── iam:PassRole on vmimport verified by IAM policy simulation
+18-rds-postgresql-target-available.png
 ```
 
-The Windows workstation performs the upload because the VMDK exists on the local `C:` drive. AWS CloudShell is used for AWS-side provisioning and inspection because it cannot directly see local Windows paths.
+Next planned captures:
 
-## Important commands — and what they mean
-
-These are implementation examples, not commands to memorize blindly.
-
-```bash
-# Identity: prove which AWS principal is executing commands
-aws sts get-caller-identity
-
-# S3 staging: create the private landing area for the VM disk
-aws s3api create-bucket --bucket <bucket> --region us-east-1
-
-# IAM: create the service role that VM Import/Export can assume
-aws iam create-role --role-name vmimport --assume-role-policy-document file://trust-policy.json
-
-# Authorization check: can the operator pass vmimport to the AWS service?
-aws iam simulate-principal-policy ... --action-names iam:PassRole ...
+```text
+19-dms-replication-instance-available.png
+20-source-endpoint-connection-success.png
+21-target-endpoint-connection-success.png
+22-dms-full-load-completed.png
+23-cdc-replication-proof.png
+24-final-data-reconciliation.png
 ```
 
-From Windows PowerShell:
-
-```powershell
-# Upload the exported VMware disk from the local workstation to S3
-aws s3 cp "C:\...\MADAR-LEGACY-01-disk1.vmdk" `
-  "s3://madar-vm-import-197821101770/MADAR-LEGACY-01-disk1.vmdk" `
-  --region us-east-1
-```
-
-The next execution command after upload verification is `aws ec2 import-image`, which starts the asynchronous VM Import/Export conversion task. The expected output of that process is an AMI; EC2 is launched only after import completion and validation.
-
-Full command-by-command explanation is maintained in `docs/07-vm-import-execution-guide.md`.
+Evidence is captured only after the corresponding state is actually observed.
 
 ## Validation philosophy
 
 A migration is not successful because an AWS resource says `Available`.
 
-The target must prove:
+The acceptance chain is:
 
 ```text
-Boot
-  -> network / DHCP
-  -> SSH / administration
+machine boot
+  -> network
+  -> administration
   -> filesystem
   -> PostgreSQL service
-  -> madar_legacy database
-  -> schema + representative data
-  -> Flask health/read/write path
-  -> operational files
-  -> scheduled processing
-  -> security review
+  -> database/schema/data
+  -> application health
+  -> DMS source/target connectivity
+  -> full-load reconciliation
+  -> CDC proof
+  -> cutover readiness
   -> rollback viability
 ```
 
-The database baseline and independent dump make it possible to distinguish "the VM booted" from "the business state migrated correctly."
-
 ## Security and cost discipline
 
-- no VM image, database dump, secret, `.env`, `.pgpass` or key is committed to Git,
+- no VM image, database dump, secret, `.env`, `.pgpass` or private key is committed to Git,
 - S3 VM-import staging is private,
-- VM Import/Export uses an IAM service role instead of static service credentials,
-- PostgreSQL is not opened to the Internet merely to simplify migration,
-- AWS credits are treated as real money,
-- the account is not upgraded simply to hide an architectural/service constraint,
-- temporary migration resources are removed after their evidence purpose is complete,
-- service-managed dependencies are investigated as carefully as resources visible in the launch template.
+- service integrations use IAM roles rather than static AWS credentials,
+- RDS is not publicly accessible,
+- PostgreSQL 5432 is not opened to the Internet for DMS,
+- lab resources use intentionally small single-AZ sizing where HA is not the experiment's objective,
+- temporary migration resources will be removed after their evidence purpose is complete.
 
 ## What this project demonstrates to a reviewer
 
-This repository is intended to show evidence of practical cloud-engineering behavior:
+This is not a diagram-only migration project. It demonstrates source discovery, VMware/Linux administration, PostgreSQL recovery and replication concepts, AWS MGN experimentation, CloudTrail troubleshooting, IAM service roles, S3 staging, EC2 VM Import/Export, EC2 validation, RDS provisioning, DMS networking and IAM prerequisites, security-group design, deterministic reconciliation, CDC planning, rollback thinking, and cost-aware engineering.
 
-- source discovery before target design,
-- VMware/Linux administration,
-- PostgreSQL recoverability and data validation,
-- AWS MGN replication and troubleshooting,
-- CloudTrail root-cause analysis,
-- IAM trust policies, service roles and `PassRole`,
-- S3 staging and AWS CLI operation,
-- EC2 VM Import/Export concepts,
-- architecture decisions under account/cost constraints,
-- migration validation, rollback thinking and cleanup discipline.
-
-It intentionally documents the failed MGN test conversion because production engineering is not a sequence of perfect screenshots; it is the ability to identify the failing layer, prove the root cause and change the plan without losing control of risk.
+The failed MGN route remains documented because production engineering is not a sequence of perfect screenshots. The useful skill is identifying the failing layer, proving why it failed, protecting recoverability, and changing the migration mechanism without losing control of risk.
 
 ## Repository map
 
-- `CURRENT-STATE.md` — exact execution state and next gate.
+- `CURRENT-STATE.md` — exact live execution state and next gate.
 - `docs/01-business-case.md` — business reason for the migration.
 - `docs/02-source-estate.md` — logical estate and representative lab topology.
 - `docs/03-discovery-assessment.md` — verified source dependencies and assessment.
 - `docs/04-migration-strategy.md` — staged rehost/replatform strategy.
 - `docs/05-target-architecture.md` — target boundaries, security and sizing.
 - `docs/06-validation-plan.md` — acceptance and reconciliation criteria.
-- `docs/07-vm-import-execution-guide.md` — detailed commands, purpose and expected results.
+- `docs/07-vm-import-execution-guide.md` — VM Import/Export execution details.
 - `docs/08-interview-guide.md` — recruiter/interview explanation and likely questions.
 - `runbooks/migration-day-runbook.md` — ordered execution/rollback/cleanup procedure.
-- `runbooks/source-lab-operations.md` — source operational commands.
 - `checklists/phase03-master-checklist.md` — implementation and evidence progress.
 - `evidence/README.md` — evidence catalog and capture rules.
-- `decisions/` — ADRs, including the MGN-to-VM-Import pivot.
+- `decisions/` — architecture decision records and migration pivots.
 - `legacy-lab/` — representative source application and scheduled workload.
 - `terraform/` — IaC position and future target infrastructure scope.
 
-## Success criteria
-
-Phase 03 is complete only when the imported EC2 workload is accepted, PostgreSQL is reconciled/replatformed as planned, operational files are validated, the application read/write path works, rollback is understood, cost/security exposure is reviewed and temporary migration resources are cleaned.
-
-## Integrity rule
-
-Tests, outputs, failures, decisions and evidence are reported as they occurred. Planned steps are labeled as planned; incomplete steps are not presented as successful.
+For the exact current execution state, see `CURRENT-STATE.md`.
