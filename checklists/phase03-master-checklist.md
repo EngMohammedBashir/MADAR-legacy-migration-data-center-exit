@@ -7,6 +7,7 @@
 - [x] MGN attempt/root cause documented truthfully.
 - [x] ADR records pivot to VM Import/Export.
 - [x] Interview/reviewer narrative documented.
+- [x] DMS/RDS execution guide added with real troubleshooting and validated commands.
 
 ## B — Representative source VM
 - [x] VMware Workstation Pro selected.
@@ -86,48 +87,61 @@
 - [x] ExternalId `vmimport` configured.
 - [x] S3/EC2 import permissions attached to role.
 - [x] `iam:PassRole` policy simulation returned `allowed`.
-- [x] local Windows upload command started.
-- [ ] VMDK upload completed.
-- [ ] S3 object size verified.
+- [x] VMDK upload completed.
+- [x] S3 object size verified at 3,629,074,432 bytes.
 
 ## H — ImportImage / AMI
-- [ ] create import container description.
-- [ ] start `aws ec2 import-image` with `vmimport` role.
-- [ ] record ImportTaskId.
-- [ ] monitor `describe-import-image-tasks`.
-- [ ] preserve any failure status message if import fails.
-- [ ] import task reaches `completed`.
-- [ ] resulting AMI ID recorded.
-- [ ] resulting snapshot ID(s) recorded.
+- [x] source S3 disk container defined.
+- [x] `aws ec2 import-image` started with `vmimport` role.
+- [x] ImportTaskId recorded: `import-ami-48f44651b4c75774t`.
+- [x] `describe-import-image-tasks` monitored.
+- [x] progress evidence captured through converting/updating/booting.
+- [x] import task reached `completed`.
+- [x] AMI recorded: `ami-0cbd2e9ec0d6f9168`.
+- [x] snapshot recorded: `snap-0920a020c47fb6447`.
 
 ## I — Imported EC2 acceptance
-- [ ] choose account-eligible x86 instance type.
-- [ ] configure least-privilege security group.
-- [ ] launch imported AMI.
-- [ ] EC2 system/instance checks pass.
-- [ ] Linux boot verified.
-- [ ] LVM/filesystems verified.
-- [ ] `eth0`/DHCP/default route/DNS verified.
-- [ ] SSH/management path verified.
-- [ ] `systemctl --failed` reviewed.
-- [ ] PostgreSQL enabled/active.
-- [ ] `madar_legacy` database exists.
-- [ ] DB row-count/record reconciliation.
-- [ ] Flask health/read/write validation.
-- [ ] operational-file/job validation.
+- [x] account-eligible x86 instance type selected: `t3.small`.
+- [x] least-privilege SSH SG configured using My IP.
+- [x] imported AMI launched as `i-051336c5f304a5319`.
+- [x] EC2 system/instance checks passed.
+- [x] Linux boot verified.
+- [x] LVM/filesystems verified on NVMe-presented storage.
+- [x] `eth0`/DHCP/default route verified.
+- [x] SSH/management path verified.
+- [x] `systemctl --failed` reviewed: zero failed units.
+- [x] PostgreSQL enabled/active.
+- [x] `madar_legacy` exists.
+- [x] DB row-count reconciliation passed: 10 / 50 / 150.
+- [x] Flask health/summary validation passed.
+- [ ] convert legacy Flask manual startup to a managed runtime service if retained long term.
 
 ## J — Database replatform to RDS
-- [ ] create private RDS PostgreSQL target.
-- [ ] create minimum suitable DMS capacity.
-- [ ] DMS source endpoint points to EC2 PostgreSQL.
-- [ ] target endpoint points to RDS.
-- [ ] run DMS Premigration Assessment.
-- [ ] capture CDC readiness finding.
-- [ ] remediate required PostgreSQL logical-replication settings.
-- [ ] reassess.
-- [ ] run Full Load + CDC.
-- [ ] reconcile RDS data.
-- [ ] controlled shipment + matching event reaches RDS via CDC.
+- [x] PostgreSQL source configured for logical replication (`wal_level=logical`).
+- [x] replication slots/senders capacity validated.
+- [x] PostgreSQL VPC listener and `pg_hba.conf` configured.
+- [x] dedicated DMS source DB login created/tested.
+- [x] DMS and RDS Security Groups created.
+- [x] SG-to-SG TCP/5432 rules configured; no Internet-wide DB ingress.
+- [x] private RDS PostgreSQL 16.14 target created.
+- [x] RDS target reached `available`.
+- [x] `dms-vpc-role` prerequisite failure captured.
+- [x] `dms-vpc-role` trust + `AmazonDMSVPCManagementRole` fixed.
+- [x] DMS replication subnet group created across two AZs.
+- [x] DMS `dms.t3.small` replication instance reached `available`.
+- [x] DMS source endpoint created.
+- [x] source endpoint connection test returned `successful`.
+- [x] target endpoint created.
+- [x] target TLS failure diagnosed and `ssl-mode=require` configured.
+- [x] target password failure diagnosed and credentials synchronized.
+- [x] target endpoint connection test returned `successful`.
+- [x] `full-load-and-cdc` task created and started.
+- [x] Full Load reached 100%.
+- [x] 3/3 tables loaded; 0 tables errored.
+- [x] RDS initial counts reconciled to 10 / 50 / 150.
+- [x] controlled source customer insert performed.
+- [x] same record reached RDS via CDC without rerunning Full Load.
+- [x] final RDS reconciliation passed: 11 / 50 / 150.
 
 ## K — File replatform
 - [ ] transfer approved operational files to S3.
@@ -137,12 +151,12 @@
 
 ## L — Cutover / rollback
 - [ ] final source/intermediate baseline captured.
-- [ ] writes frozen for cutover window.
-- [ ] CDC caught up.
-- [ ] Flask reconfigured to RDS securely.
-- [ ] acceptance criteria executed.
+- [ ] writes frozen for cutover window if actual cutover is executed.
+- [ ] confirm CDC caught up immediately before cutover.
+- [ ] Flask reconfigured to RDS securely if actual DB cutover is executed.
+- [ ] application health/read/write acceptance executed against RDS.
 - [ ] explicit continue/abort decision documented.
-- [ ] rollback path validated until acceptance.
+- [ ] rollback path retained until acceptance.
 
 ## M — Evidence
 - [x] source baseline/recoverability evidence.
@@ -153,20 +167,27 @@
 - [x] clean export/file list and streamOptimized evidence recorded.
 - [x] S3 bucket + vmimport IAM preparation recorded.
 - [x] PassRole `allowed` result recorded.
-- [ ] completed VMDK upload evidence.
-- [ ] ImportImage progress/completion evidence.
-- [ ] AMI evidence.
-- [ ] imported EC2 validation evidence.
-- [ ] DMS/RDS CDC evidence.
+- [x] completed VMDK upload evidence.
+- [x] ImportImage progress/completion evidence.
+- [x] AMI evidence.
+- [x] imported EC2 validation evidence.
+- [x] RDS available evidence.
+- [x] DMS replication instance available evidence.
+- [x] source/target endpoint success evidence.
+- [x] Full Load completion evidence.
+- [x] CDC proof evidence.
+- [x] final RDS reconciliation evidence.
+- [ ] actual screenshot binaries copied into final repository evidence subfolders from workstation.
 - [ ] file-integrity evidence.
 - [ ] final cutover evidence.
 - [ ] cleanup/cost evidence.
 
 ## N — Cleanup / closeout
+- [ ] decide whether DMS must remain running for a final cutover demonstration.
+- [ ] stop/delete DMS task/instance after final CDC purpose.
 - [ ] remove VM import VMDK after no longer needed.
 - [ ] clean temporary VM-import IAM/bucket resources if not retained.
 - [ ] terminate temporary EC2 after final purpose.
-- [ ] stop/delete DMS resources after proof.
 - [ ] delete lab RDS if fully tearing down.
 - [ ] clean unneeded AMI/EBS snapshots intentionally.
 - [ ] verify residual resources across service consoles.
