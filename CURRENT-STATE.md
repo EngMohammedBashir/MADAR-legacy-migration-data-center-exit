@@ -1,13 +1,18 @@
 # Phase 03 — Current State
 
-**Status: REHOST VALIDATED — DATABASE REPLATFORM IN PROGRESS**  
+**Status: VM REHOST COMPLETE — DATABASE REPLATFORM VALIDATED**  
 **Region: us-east-1**
 
 ## Executive state
 
-The VMware rehost path is complete and validated. The exported VMDK was uploaded to private S3 staging, converted by EC2 VM Import/Export into an AMI, launched as EC2, and validated at OS, network, filesystem, PostgreSQL, database and application levels.
+Stage 1 and Stage 2 have both passed their technical acceptance gates.
 
-The project has now entered Stage 2: replatforming PostgreSQL from the migrated EC2 host to Amazon RDS for PostgreSQL using AWS DMS Full Load + CDC.
+```text
+Stage 1  VMware -> EC2 VM rehost                 COMPLETE
+Stage 2  EC2 PostgreSQL -> RDS via DMS          COMPLETE
+Stage 3  operational file replatform to S3      NEXT
+Cutover  application DB switch + closeout       NEXT
+```
 
 ## Stage 1 — VMware -> EC2: COMPLETE
 
@@ -20,20 +25,19 @@ VMware MADAR-LEGACY-01
   -> EC2 i-051336c5f304a5319
 ```
 
-Import task:
+Import result:
 
 ```text
-ImportTaskId  import-ami-48f44651b4c75774t
-Status        completed
-AMI           ami-0cbd2e9ec0d6f9168
-Snapshot      snap-0920a020c47fb6447
-Architecture  x86_64
-Virtualization hvm
-ENA           enabled
-Root volume   25 GiB
+ImportTaskId   import-ami-48f44651b4c75774t
+Status         completed
+AMI            ami-0cbd2e9ec0d6f9168
+Snapshot       snap-0920a020c47fb6447
+Architecture   x86_64
+Virtualization HVM
+ENA            enabled
 ```
 
-Migrated EC2:
+Migrated EC2 acceptance:
 
 ```text
 Name          MADAR-LEGACY-EC2
@@ -41,59 +45,55 @@ Instance      i-051336c5f304a5319
 Type          t3.small
 Private IP    172.31.3.142
 VPC           vpc-015017581b8954e61
-Subnet        subnet-04e63af31360b080a / us-east-1a
-Source SG     sg-0589383abcc3ebbbc
+Subnet        subnet-04e63af31360b080a
 ```
 
-Post-import validation succeeded:
+Validated:
 
-- Ubuntu 24.04.4 / kernel 6.8.0-138 / x86_64 booted successfully.
-- `eth0` acquired VPC DHCP networking.
-- SSH administration succeeded.
-- LVM/ext4 root filesystem mounted correctly.
-- PostgreSQL 16.14 is enabled and active.
-- `madar_legacy` exists.
-- Tables: `customers`, `shipments`, `shipment_events`.
-- Baseline counts preserved: **10 / 50 / 150**.
-- `systemctl --failed` returned zero failed units.
-- Flask application was manually restarted with its required environment credential and returned healthy database connectivity and the expected summary counts.
+- Ubuntu 24.04.4 / kernel 6.8.0-138 / x86_64 booted.
+- `eth0` acquired VPC DHCP configuration.
+- LVM/ext4 mounted correctly on NVMe-presented EBS storage.
+- SSH access succeeded.
+- PostgreSQL 16.14 was enabled and active.
+- `madar_legacy` and expected tables existed.
+- baseline counts matched `10 / 50 / 150`.
+- zero failed systemd units.
+- Flask `/api/health` returned database connected / status ok.
+- Flask `/api/summary` returned the expected business counts.
 
-## Stage 2 — PostgreSQL -> RDS with DMS: ACTIVE
+## Stage 2 — EC2 PostgreSQL -> RDS via AWS DMS: COMPLETE
 
-### Source preparation
-
-PostgreSQL logical replication support was enabled:
+### Source CDC readiness
 
 ```text
 wal_level              logical
 max_replication_slots  10
 max_wal_senders        10
+PostgreSQL listener    TCP/5432 on VPC-reachable interface
+DMS login              dedicated and connectivity validated
 ```
 
-PostgreSQL was configured to listen for VPC-local migration traffic and `pg_hba.conf` permits SCRAM authentication for the lab VPC range. A dedicated DMS database login was created and connectivity to `madar_legacy` over the EC2 private address was validated.
+Secrets are not recorded in Git.
 
-**Secrets are intentionally not recorded in this repository.**
-
-### Network controls
-
-Dedicated migration security groups:
+### Private network controls
 
 ```text
-DMS SG       sg-085569e2731850c8a  (madar-dms-sg)
-RDS SG       sg-093756a8cabaad407  (madar-rds-sg)
-Source SG    sg-0589383abcc3ebbbc  (madar-legacy-migration-sg)
+Source EC2 SG  sg-0589383abcc3ebbbc
+DMS SG         sg-085569e2731850c8a
+RDS SG         sg-093756a8cabaad407
 ```
 
-Ingress design:
+Allowed migration paths:
 
 ```text
-DMS SG -> TCP/5432 -> EC2 source PostgreSQL
-DMS SG -> TCP/5432 -> RDS target PostgreSQL
+DMS SG  -> TCP/5432 -> source EC2 PostgreSQL
+DMS SG  -> TCP/5432 -> target RDS PostgreSQL
+EC2 SG  -> TCP/5432 -> RDS for validation/cutover testing
 ```
 
-PostgreSQL is not opened to `0.0.0.0/0` for migration.
+No Internet-wide PostgreSQL ingress was used.
 
-### RDS target — AVAILABLE
+### RDS target
 
 ```text
 Identifier  madar-postgres-target
@@ -101,94 +101,121 @@ Engine      PostgreSQL 16.14
 Class       db.t3.micro
 Storage     20 GiB gp3
 Public      false
-Multi-AZ    false (lab/cost decision)
 Endpoint    madar-postgres-target.cgx64cygc3mj.us-east-1.rds.amazonaws.com
-SG          sg-093756a8cabaad407
+Status      available
 ```
 
-The RDS subnet group spans `us-east-1a` and `us-east-1b`.
-
-### DMS IAM prerequisite — RESOLVED
-
-The first DMS replication-subnet-group request failed because `dms-vpc-role` was not configured. This was treated as an IAM/service prerequisite rather than a networking failure.
-
-Created/configured:
+### DMS infrastructure
 
 ```text
-Role          dms-vpc-role
-Trusted       dms.amazonaws.com
-Policy        AmazonDMSVPCManagementRole
+IAM role        dms-vpc-role
+Trust           dms.amazonaws.com
+Managed policy  AmazonDMSVPCManagementRole
+Subnet group    madar-dms-subnets / Complete / us-east-1a + us-east-1b
+Replication     madar-dms-repl
+Class           dms.t3.small
+Engine          3.6.1
+Private IP      172.31.13.46
+Status          available
 ```
 
-After the role and AWS-managed policy were attached, the same subnet-group operation succeeded.
+The first replication-subnet-group request failed because `dms-vpc-role` was not configured. Fixing IAM trust/policy resolved the request without changing network design.
 
-### DMS subnet group — COMPLETE
+### Endpoint validation
 
 ```text
-Identifier  madar-dms-subnets
-VPC         vpc-015017581b8954e61
-AZs         us-east-1a, us-east-1b
-Status      Complete
-Network     IPv4
+Source endpoint  madar-postgres-source  successful
+Target endpoint  madar-postgres-target  successful
 ```
 
-### DMS replication instance — PROVISIONING
+Target troubleshooting preserved as an engineering finding:
+
+1. `no pg_hba.conf entry ... no encryption` -> DMS had reached RDS, but target connection needed TLS.
+2. target endpoint changed to `ssl-mode=require`.
+3. next error became `password authentication failed` -> network/TLS were now healthy; credentials were the remaining layer.
+4. RDS credential and endpoint credential were synchronized.
+5. target test returned `successful`.
+
+### Full Load + CDC task
 
 ```text
-Identifier  madar-dms-repl
-Class       dms.t3.small
-Engine      3.6.1
-Storage     20 GiB
-Public      false
-Multi-AZ    false
-SG          sg-085569e2731850c8a
-Status      creating (last observed state)
+Task            madar-full-load-cdc
+Migration type  full-load-and-cdc
+Status          running after initial load
+Full Load       100%
+Tables loaded   3
+Tables loading  0
+Tables errored  0
 ```
 
-Do not claim the DMS replication instance is available until the AWS API reports `available`.
+Per-table Full Load:
+
+```text
+public.customers         Table completed   10 rows
+public.shipments         Table completed   50 rows
+public.shipment_events   Table completed   150 rows
+```
+
+Independent SQL query against RDS confirmed the same `10 / 50 / 150` baseline.
+
+### CDC proof
+
+A controlled row was inserted into the **source EC2 PostgreSQL** after Full Load:
+
+```text
+customer_id   11
+company_name  MADAR CDC TEST CUSTOMER
+region        Riyadh
+```
+
+Without rerunning Full Load, the same row appeared on RDS and the target customer count became `11`.
+
+Final target reconciliation:
+
+```text
+customers         11
+shipments         50
+shipment_events   150
+```
+
+**Stage 2 acceptance: PASS.**
 
 ## Evidence checkpoint
 
-Latest completed screenshot checkpoint:
+Completed evidence sequence through Stage 2:
 
 ```text
 18-rds-postgresql-target-available.png
-```
-
-Next capture only after the DMS replication instance reports `available`:
-
-```text
 19-dms-replication-instance-available.png
+20-source-endpoint-connection-success.png
+21-target-endpoint-connection-success.png
+22-dms-full-load-completed.png
+23-cdc-replication-proof.png
+24-final-data-reconciliation.png
 ```
 
-Planned evidence sequence after that:
+See `evidence/README.md` for captions and publication rules.
+
+## Detailed execution docs
 
 ```text
-20  source endpoint connection success
-21  target endpoint connection success
-22  DMS full load completed
-23  CDC replication proof
-24  final data reconciliation
+docs/07-vm-import-execution-guide.md  VMware -> EC2
+/docs/09-dms-rds-execution-guide.md    EC2 PostgreSQL -> RDS via DMS
 ```
 
 ## Next gate
 
 ```text
-1. Wait for madar-dms-repl -> available
-2. Capture evidence 19
-3. Create DMS source endpoint for EC2 PostgreSQL
-4. Create DMS target endpoint for RDS PostgreSQL
-5. Test both endpoint connections
-6. Create Full Load + CDC replication task
-7. Run initial load
-8. Reconcile customers / shipments / shipment_events
-9. Generate a controlled source-side change
-10. Prove CDC applies it to RDS
-11. Record cutover/rollback evidence
-12. Continue operational-file replatform track to S3
-13. Perform security/cost review and cleanup temporary migration resources
+1. decide whether to perform actual Flask cutover to RDS in this lab
+2. if cutting over: move runtime DB secret safely and validate Flask against RDS
+3. replatform approved operational files to S3 and validate hashes/counts
+4. document explicit continue/rollback decision
+5. inventory and clean temporary migration infrastructure
+6. review actual AWS cost/credit impact
+7. finalize RTO/RPO and lessons learned
+8. update the master transformation repository
 ```
 
-## Current stop rule
+## Stop rule
 
-Do not cut the application over to RDS merely because RDS is `available`. Database migration is accepted only after DMS endpoint tests succeed, initial data reconciles, CDC is demonstrated, and rollback remains possible.
+Do not delete the source/recovery anchors until cutover acceptance is documented. Do not delete DMS before any desired final CDC/cutover evidence is captured.
