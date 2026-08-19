@@ -2,200 +2,215 @@
 
 ## 30-second recruiter version
 
-> I built a hands-on migration lab that moved a legacy Ubuntu/PostgreSQL workload from VMware toward AWS. I started with AWS MGN and successfully completed block replication, but the test launch failed because MGN's service-managed conversion server required an `m5.large`, which the account's Free Plan blocked. I traced that with CloudTrail, confirmed the limitation with AWS Transform, cleaned the failed path, and pivoted to EC2 VM Import/Export. I then prepared the Linux guest for EC2 boot/network/storage compatibility, exported a clean stream-optimized VMDK, staged it privately in S3 with a dedicated `vmimport` IAM role, and began the import path to AMI/EC2. The next phase replatforms PostgreSQL to RDS using DMS Full Load + CDC.
+> I built an end-to-end legacy migration lab that moved an Ubuntu/PostgreSQL workload from VMware to AWS. I first tested AWS MGN and completed block replication, but the managed conversion stage failed because it required an `m5.large` that the lab account plan rejected. I traced the exact failure through CloudTrail, confirmed the managed-service limitation, and pivoted to EC2 VM Import/Export. I successfully converted the VMware VMDK into an AMI, launched and validated the workload on EC2, then replatformed PostgreSQL to private Amazon RDS using AWS DMS Full Load + CDC. The initial `10/50/150` dataset reconciled exactly, and I proved CDC by inserting a new source record and watching it appear automatically in RDS.
 
 ## 90-second technical version
 
-> The source is a VMware VM running Ubuntu 24.04, Flask and PostgreSQL 16. I first discovered the workload rather than designing AWS resources blindly: compute, LVM/ext4 storage, ports, services, cron, files, database state and dependencies. I created deterministic data and independent database/file recovery artifacts.
+> The source was a VMware VM running Ubuntu 24.04.4, Flask and PostgreSQL 16.14. Before migration I inventoried compute, BIOS/GRUB, GPT/LVM storage, network dependencies, services, database state, cron jobs and recovery artifacts. I also created an independent PostgreSQL logical backup.
 >
-> For Stage 1 I evaluated AWS MGN. The agent replicated all 25 GiB and reached Healthy/Ready for testing. Test launch failed during conversion. The target launch template was `t3.small`, so I used CloudTrail to inspect the actual `RunInstances` request and found that MGN itself was launching an `m5.large` conversion server under `AWSApplicationMigrationConversionServerRole`. AWS Transform confirmed that conversion server is service-managed and cannot be resized. Because the lab account is intentionally Free Plan, I did not upgrade or retry the wrong layer.
+> My first rehost path was AWS MGN. Its agent replicated all 25 GiB and reached Healthy/Ready for testing, but test launch failed in a separate managed conversion phase. CloudTrail showed that MGN was launching an `m5.large` conversion server under the service role, while the customer-controlled target remained `t3.small`. I confirmed the conversion node could not be resized, so I stopped changing the wrong layer and pivoted to VM Import/Export.
 >
-> I pivoted to EC2 VM Import/Export. Before export I verified GRUB/BIOS, GPT/LVM, ENA/NVMe drivers and initramfs, changed the VMware-specific `ens33` interface dependency to `eth0` with DHCP, reboot-tested networking, enabled SSH/PostgreSQL at boot, and created a final logical PostgreSQL dump. I exported a clean stream-optimized VMDK, created a private S3 staging bucket, a least-privilege `vmimport` service role trusted by `vmie.amazonaws.com`, verified `iam:PassRole`, and uploaded the VMDK. The import task should produce an AMI, which is then validated on EC2 before DMS moves PostgreSQL into RDS.
+> I prepared the guest for EC2 by validating ENA/NVMe support, GRUB, LVM and initramfs, replaced the VMware-specific `ens33` dependency with `eth0` plus DHCP, exported a clean stream-optimized VMDK, uploaded it to private S3, created the `vmimport` IAM service role, verified `iam:PassRole`, and imported the disk. The task completed with an AMI and snapshot. The EC2 instance passed boot, networking, NVMe/LVM, SSH, PostgreSQL, database-count and Flask API validation.
+>
+> For the database replatform I enabled PostgreSQL logical WAL, built SG-to-SG TCP/5432 paths, created private RDS PostgreSQL 16.14, repaired the required `dms-vpc-role`, provisioned a private DMS replication instance, tested source and target endpoints, and troubleshot target TLS and authentication separately. The `full-load-and-cdc` task loaded all three tables with zero errors. I then inserted `MADAR CDC TEST CUSTOMER` on the EC2 source and verified the same row appeared on RDS without rerunning Full Load. Final RDS counts were `11 / 50 / 150`.
 
 ## Architecture mental map
 
 ```text
 VMware
   |
-  | clean VMDK export
+  | clean VMDK
   v
-S3 staging
+private S3
   |
-  | VM Import/Export + vmimport IAM role
+  | VM Import/Export
   v
-AMI
-  |
-  v
-EC2 intermediate landing
-  |
-  +--> DMS Full Load + CDC --> RDS PostgreSQL
-  |
-  +--> validated files ------> S3
+AMI -> EC2
+       |
+       | PostgreSQL logical WAL
+       v
+      DMS
+       |
+       | Full Load + CDC
+       v
+private RDS PostgreSQL
 ```
 
-## The most important story: the MGN failure
+## Three troubleshooting stories worth telling
 
-Do not hide it. Explain it as layered troubleshooting.
+### 1. MGN conversion-server blocker
 
 ```text
-Symptom
-MGN test launch failed
-
-Initial assumption to challenge
-"Maybe t3.small is wrong"
-
-Evidence
-CloudTrail RunInstances
-
-Root cause
-service-managed MGN Conversion Server requested m5.large
-
-Why target setting did not help
-Target EC2 and conversion server are different resources
-
-Decision
-Do not upgrade account for lab; pivot rehost mechanism
-
-Result
-MGN evidence preserved, resources cleaned, VM Import/Export path started
+Symptom       MGN test launch failed
+Evidence      CloudTrail RunInstances
+Root cause    managed conversion server requested m5.large
+Wrong fix     repeatedly changing target t3.small
+Decision      pivot to VM Import/Export
 ```
 
-A strong interview sentence:
+Strong sentence:
 
-> The important part was realizing that the target instance type I controlled was not the instance type that failed. CloudTrail let me identify the actual managed conversion server and avoid repeatedly changing the wrong configuration.
+> I separated the customer-controlled target from the service-managed conversion node and used CloudTrail to prove which resource actually failed.
+
+### 2. DMS IAM prerequisite
+
+```text
+Symptom       CreateReplicationSubnetGroup AccessDeniedFault
+Message       dms-vpc-role not configured properly
+Root cause    DMS control-plane IAM prerequisite
+Fix           trust dms.amazonaws.com + AmazonDMSVPCManagementRole
+Result        same subnet-group operation succeeded
+```
+
+Strong sentence:
+
+> I treated it as an IAM control-plane failure, not a routing problem, so I did not start changing subnets or opening security groups.
+
+### 3. DMS target connection: TLS then password
+
+```text
+Failure 1  no encryption
+Meaning    DMS reached PostgreSQL; network path worked
+Fix        ssl-mode=require
+
+Failure 2  password authentication failed
+Meaning    network + TLS now worked; credentials were wrong
+Fix        synchronize endpoint/RDS credentials
+
+Final      successful
+```
+
+Strong sentence:
+
+> Each error narrowed the failing layer. I did not respond to an authentication problem by weakening network controls.
 
 ## Likely questions and strong answers
 
-### 1. Why did you choose rehost first instead of refactoring the application?
+### Why rehost before database modernization?
 
-Rehost reduces simultaneous change during data-center exit. It gives a known intermediate state in AWS. Database modernization can then happen separately through RDS/DMS, so a failure can be attributed to one migration layer rather than an application rewrite plus infrastructure migration at the same time.
+It reduces simultaneous change. First I proved the same machine could run on EC2. Then I changed the database operating model separately. That makes failures attributable to a specific layer and keeps rollback clearer.
 
-### 2. Why not leave PostgreSQL permanently on the imported EC2 instance?
+### Why VM Import/Export instead of rebuilding Ubuntu?
 
-That would preserve host-level patching, backup, failure-domain and database administration responsibilities. EC2 PostgreSQL is only the intermediate source; RDS is the final database direction.
+The rehost objective was to move the existing VMware machine image. A clean EC2 rebuild would demonstrate redeployment, not machine-image migration.
 
-### 3. Why did MGN replication succeed but test launch fail?
+### Why S3?
 
-They are different phases with different infrastructure. Replication used MGN staging resources successfully. Test launch introduced a service-managed conversion server. CloudTrail showed that server requested `m5.large`, which the Free Plan rejected.
+S3 is the private staging warehouse for the exported VMDK. VM Import/Export reads the object and produces AWS image/snapshot resources.
 
-### 4. Why couldn't you just set the conversion server to `t3.small`?
+### What is `vmimport`?
 
-MGN exposes the replication-server configuration and the final target launch template, but not the conversion-server instance type. AWS Transform confirmed it is service-managed and not customer-configurable.
+A service role trusted by `vmie.amazonaws.com`. It is the permission badge that allows the import service to read the S3 artifact and perform required EC2 image/snapshot actions.
 
-### 5. Why VM Import/Export instead of rebuilding Ubuntu manually?
+### Why check `iam:PassRole`?
 
-The migration objective is to prove movement of the existing VMware machine image. A fresh EC2 build would be a rebuild/redeploy project rather than a full-machine rehost.
+Because creating a role does not automatically mean the operator is authorized to delegate it to an AWS service. I validated the handoff before executing the long import workflow.
 
-### 6. What is the role of S3 in VM Import/Export?
+### Why ENA and NVMe?
 
-S3 is the staging warehouse. The exported VMDK is uploaded there; VM Import/Export reads that object and converts it into AWS image/snapshot resources.
+An application can be healthy while the migrated guest fails to access AWS virtual networking or storage. I verified both the installed modules and early-boot availability before exporting.
 
-### 7. What is the `vmimport` IAM role?
+### Why change `ens33`?
 
-It is a service role that `vmie.amazonaws.com` assumes. It gives VM Import/Export narrowly scoped access to read the S3 image and perform the required EC2 snapshot/image operations. The role is the service's permission badge, not the migration service itself.
+The network configuration was coupled to VMware virtual hardware. I switched to `eth0` with DHCP and reboot-tested it before export so the guest could accept a new VPC identity.
 
-### 8. What is `iam:PassRole` and why did you check it?
+### Why take `pg_dump` if the whole disk moves?
 
-The operator may create a role but still be forbidden from telling an AWS service to use it. `iam:PassRole` controls that handoff. I simulated the operator's policy before the expensive/slow import step and got `allowed`.
+The disk image is the primary rehost mechanism. The PostgreSQL logical dump is an independent application-level recovery path if the machine boots but database-level recovery is needed.
 
-### 9. Why did you use Windows PowerShell for the upload but CloudShell for IAM/S3 setup?
+### What does `wal_level=logical` do for DMS?
 
-The VMDK exists on the local Windows filesystem. CloudShell runs inside AWS and cannot see `C:\Users\...`. Local AWS CLI can read the file and upload it to S3; once it is in S3, CloudShell can manage AWS-side resources and the import task.
+It exposes logical row-change information through PostgreSQL WAL so DMS can continue replicating INSERT/UPDATE/DELETE activity after the initial load.
 
-### 10. Why did you change `ens33` to `eth0`?
+### Full Load vs CDC?
 
-The guest configuration was tied to a VMware-specific predictable NIC name. I wanted the imported guest to rely on a simpler DHCP interface configuration rather than a name coupled to the original virtual hardware. I changed GRUB/Netplan together and reboot-tested before export.
+```text
+Full Load = copy the existing database state
+CDC       = propagate changes that occur after/while the migration is running
+```
 
-### 11. Why check ENA and NVMe?
+In this lab Full Load copied `10 / 50 / 150`; CDC then propagated a new customer, changing the target to `11 / 50 / 150`.
 
-A workload can be application-healthy yet fail after hypervisor migration because the guest cannot access EC2 networking or storage. ENA is relevant to EC2 network adapters and NVMe to Nitro-era storage presentation. I also checked initramfs so those drivers are available during early boot.
+### How did you prove CDC rather than assume it?
 
-### 12. Why create a PostgreSQL dump if the whole disk is migrating?
+I inserted a uniquely named customer on the EC2 source after Full Load. Without restarting the task, I queried RDS and found the same row with the target count incremented to 11.
 
-The disk migration carries PostgreSQL files, but the logical dump is an independent recovery path. If the VM boots but the database has an application-level integrity problem, I have a PostgreSQL-native recovery artifact instead of relying only on the machine image.
+### Why is RDS private?
 
-### 13. How do you know the database migration is correct?
+A database does not need Internet exposure for this design. DMS and EC2 reach it through VPC networking and SG-to-SG rules on TCP/5432.
 
-I use a deterministic baseline and reconcile row counts, representative records and application behavior. Later, DMS CDC is proven by performing a controlled shipment update plus event insert on the source and verifying the same change appears on RDS.
+### What would be different in production?
 
-### 14. Why didn't you make the S3 import bucket public?
+The lab intentionally uses small/single-AZ resources and temporary operational choices. Production would require HA sizing, backups/retention, secret management, monitoring, defined maintenance/patch policy, formal cutover windows, measured replication lag, stronger application runtime management and tested DR/RTO/RPO controls.
 
-There is no need. The service role can read a private bucket. VM images can contain the whole operating system and application data, so public access would be an unnecessary security risk.
+### Why not Terraform every migration action?
 
-### 15. Why not use Terraform for every step?
-
-Terraform is used where desired-state infrastructure benefits from reproducibility. VM Import/Export is an asynchronous conversion workflow driven by an external multi-GB artifact. CLI is clearer for the import task; Terraform can manage the stable target network/compute/database infrastructure after the AMI exists.
-
-### 16. What would make you roll back?
-
-Unexplained database differences, failed critical application paths, unsafe network exposure, inability to manage the host, boot/filesystem issues, or unacceptable DMS replication state. The VMware source remains the rollback anchor until explicit target acceptance.
-
-### 17. What did you learn that an SAA exam would not teach deeply?
-
-The certification teaches service selection and architecture principles. The lab forced me to work through guest OS boot/network/storage compatibility, IAM service-role boundaries, CloudTrail root-cause analysis, asynchronous migration tasks, local-vs-CloudShell execution context and real cleanup/cost constraints.
+Terraform is ideal for stable desired-state infrastructure. An import task and a one-time DMS migration are asynchronous operational workflows around external artifacts/data streams. I used CLI where it made the execution state explicit, while the repository documents how stable target infrastructure can later be codified.
 
 ## Commands worth recognizing — not memorizing
 
 ```text
 aws sts get-caller-identity
-  -> who am I in AWS?
+  -> verify operator identity
 
-aws s3 cp
-  -> move the local VMDK into S3
-
-aws iam create-role / put-role-policy
-  -> create the service permission boundary
+aws s3 cp / s3api head-object
+  -> stage and verify the VMDK
 
 aws iam simulate-principal-policy
-  -> check authorization before execution
+  -> verify PassRole authorization
 
 aws ec2 import-image
-  -> start VMDK-to-AMI conversion
-
 aws ec2 describe-import-image-tasks
-  -> monitor asynchronous conversion
+  -> create/monitor VMDK -> AMI conversion
 
-modinfo / lsinitramfs
-  -> inspect guest driver readiness
+modinfo / lsinitramfs / lsblk / pvs / vgs / lvs
+  -> prove guest driver/boot/storage readiness
 
-lsblk / pvs / vgs / lvs
-  -> understand the source disk/LVM layout
+SHOW wal_level / max_replication_slots / max_wal_senders
+  -> prove PostgreSQL CDC readiness
 
-systemctl
-  -> verify boot-time service state
+aws dms test-connection
+aws dms describe-connections
+  -> validate source/target paths
 
-pg_dump / pg_restore -l
-  -> create and validate an independent DB recovery point
+aws dms create-replication-task
+aws dms start-replication-task
+aws dms describe-table-statistics
+  -> execute and validate Full Load + CDC
+
+psql COUNT(*) + controlled INSERT
+  -> independently reconcile target and prove CDC
 ```
 
 ## What not to say
 
-Avoid weak descriptions such as:
+Weak:
 
-> I used AWS CLI to migrate a VM.
+> I moved a VM to EC2 and used DMS.
 
-or:
+Better:
 
-> I copied a server to EC2.
-
-Those hide the engineering work.
-
-Prefer:
-
-> I treated the migration as a sequence of independently validated layers: source discovery, recovery baseline, machine-image compatibility, secure staging, IAM service delegation, asynchronous image conversion, target validation, then database replatforming.
+> I migrated the workload as independently validated layers: source recovery, guest compatibility, secure image staging, IAM delegation, image conversion, EC2 workload acceptance, PostgreSQL logical-replication readiness, private DMS/RDS networking, Full Load reconciliation and a controlled CDC proof.
 
 ## HR-friendly project value
 
-This project demonstrates more than knowledge of AWS service names. It shows:
+This project demonstrates:
 
-- ownership of an ambiguous technical problem,
-- evidence-based troubleshooting,
-- willingness to change a design when constraints invalidate it,
-- cost/risk awareness,
-- security discipline,
-- documentation of decisions and failures,
-- ability to explain technical depth at both executive and engineering levels.
+- ownership of an ambiguous migration problem,
+- evidence-based troubleshooting rather than random retries,
+- Linux/VMware depth beyond clicking AWS services,
+- security and least-exposure thinking,
+- cost/account-constraint awareness,
+- data-integrity validation,
+- willingness to preserve and explain failures,
+- ability to communicate one project at recruiter, architect and operator depth.
 
-## Final one-line CV bullet candidate
+## CV bullet candidates
 
-> Engineered a VMware-to-AWS legacy migration lab for Ubuntu/PostgreSQL, troubleshooting an MGN managed-conversion blocker via CloudTrail and pivoting to secure S3/VM Import/Export rehosting with IAM service roles, EC2 compatibility validation, rollback controls, and a staged DMS-to-RDS modernization plan.
+Concise:
+
+> Migrated a legacy Ubuntu/PostgreSQL workload from VMware to AWS, pivoting from an MGN managed-conversion blocker to EC2 VM Import/Export, validating the rehost end-to-end, and replatforming PostgreSQL to private Amazon RDS using AWS DMS Full Load + CDC with zero table-load errors and controlled change-replication proof.
+
+More technical:
+
+> Engineered a VMware-to-AWS migration for Ubuntu 24.04/PostgreSQL 16.14: diagnosed an AWS MGN conversion-server blocker via CloudTrail, imported a stream-optimized VMDK through private S3 into EC2, validated ENA/NVMe/LVM/network/application state, then executed DMS Full Load + CDC to private RDS PostgreSQL with SG-to-SG controls, TLS, `3/3` tables loaded, `0` errors, and verified post-load CDC.
