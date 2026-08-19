@@ -2,143 +2,174 @@
 
 ## A — Repository & story
 - [x] Phase repository created.
-- [x] Legacy estate positioned before the AWS transformation.
 - [x] Business case, source estate and validation philosophy documented.
-- [x] Master transformation repository linkage established.
+- [x] Source workload built and baselined.
+- [x] MGN attempt/root cause documented truthfully.
+- [x] ADR records pivot to VM Import/Export.
+- [x] Interview/reviewer narrative documented.
 
-## B — Local host preflight
-- [x] Virtualization/Hyper-V/storage/RAM/CPU constraints checked.
-- [x] VMware Workstation Pro 26H1 selected.
-- [x] Ubuntu Server 24.04.4 LTS selected and versions recorded.
-
-## C — Representative legacy VM
+## B — Representative source VM
+- [x] VMware Workstation Pro selected.
 - [x] `MADAR-LEGACY-01` created.
-- [x] 2 vCPU / 2560 MB RAM / 25 GB dynamic disk.
-- [x] VMware NAT and SSH administration verified.
-- [x] LVM root capacity corrected and OS patched/rebooted.
-- [x] Python/PostgreSQL dependencies installed using isolated `.venv`.
-- [x] Flask shipment application installed.
-- [x] `madar_legacy` / `madar_app` database implementation verified.
-- [x] Operational-file area created.
-- [x] Scheduled/background job configured and demonstrated.
-- [x] Pre-migration database and operational-file backups created and verified.
-- [x] PostgreSQL configuration backup created before DMS/CDC changes.
+- [x] Ubuntu Server 24.04.4 LTS.
+- [x] 2 vCPU / ~2.4 GiB RAM / 25 GiB dynamic disk.
+- [x] Flask + PostgreSQL workload operational.
+- [x] deterministic data 10 customers / 50 shipments / 150 events.
+- [x] operational files + scheduled report job demonstrated.
+- [x] application read/write path demonstrated.
+- [x] source DB/file/config backups created and verified.
 
-## D — Synthetic data & source proof
-- [x] Deterministic dataset: 10 customers / 50 shipments / 150 events.
-- [x] Operational shipment export and status report generated.
-- [x] Application read path demonstrated.
-- [x] Application write path demonstrated transactionally via PATCH endpoint.
-- [x] Background job demonstrated via controlled two-minute cron proof.
-- [x] DB row counts independently verified.
-- [ ] Capture final representative database aggregates immediately before cutover.
-- [x] SHA-256 source-file manifest generated and verified.
-- [x] Source file count/size recorded.
-- [x] Deterministic baseline restored after write-path proof.
-- [x] Source evidence captured locally.
+## C — Discovery & assessment
+- [x] compute/runtime inventory.
+- [x] disk/LVM/filesystem inventory.
+- [x] process/service/listener inventory.
+- [x] application/database/file/job dependencies.
+- [x] network/DNS dependency assessment.
+- [x] component-level migration disposition.
+- [x] cutover/rollback principle.
+- [ ] final RTO/RPO narrative at closeout.
 
-## E — Discovery
-- [x] Inventory compute/runtime.
-- [x] Inventory ports/processes/services.
-- [x] Inventory application configuration at the required migration level.
-- [x] Inventory database dependencies.
-- [x] Inventory filesystem dependencies.
-- [x] Inventory scheduled jobs.
-- [x] Inventory identities/credentials without exposing secrets.
-- [x] Inventory DNS/network dependencies for the representative lab.
-- [x] Record external-integration assumptions (none required by the representative workload beyond AWS migration connectivity).
-- [x] Draw dependency map.
+## D — MGN experiment
+- [x] MGN initialized and agent installed.
+- [x] source appeared in MGN.
+- [x] 25/25 GiB initial replication completed.
+- [x] replication status reached Healthy / Ready for testing.
+- [x] test launch attempted.
+- [x] snapshot step succeeded.
+- [x] conversion failure captured.
+- [x] CloudTrail `RunInstances` identified `m5.large` conversion server.
+- [x] distinguished replication server / target / conversion server.
+- [x] AWS Transform confirmation captured: conversion type not configurable.
+- [x] decision made not to upgrade Free Plan for lab.
+- [x] MGN source deleted.
+- [x] replication EC2 terminated.
+- [x] residual EBS/snapshot resources cleaned.
 
-## F — Assessment & decision
-- [x] Classify component criticality/statefulness.
-- [x] Evaluate migration disposition per component.
-- [x] Compare target options and migration services.
-- [x] Record rejected alternatives.
-- [x] Approve target architecture for lab execution.
-- [x] Document migration strategy and rationale.
-- [ ] Define final RTO/RPO assumptions for closeout narrative.
-- [x] Define cutover principle and rollback triggers.
+## E — VM Import/Export guest preparation
+- [x] Ubuntu/kernel/architecture verified.
+- [x] BIOS + GRUB2 verified.
+- [x] GPT + LVM/ext4 layout verified.
+- [x] ENA driver verified in kernel/initramfs.
+- [x] NVMe driver verified in kernel/initramfs.
+- [x] Xen block support verified.
+- [x] GRUB backup created before NIC-name change.
+- [x] Netplan backup created.
+- [x] `net.ifnames=0` configured.
+- [x] Netplan changed `ens33` -> `eth0` with DHCP.
+- [x] `update-grub` / `netplan generate` completed.
+- [x] reboot validated `eth0`, DHCP, route, Internet and DNS.
+- [x] SSH enabled + active.
+- [x] PostgreSQL enabled + active.
+- [x] `madar_legacy` present after reboot.
+- [x] GRUB installed/rechecked on `/dev/sda`.
+- [x] kernel/initramfs boot files verified.
+- [x] zero failed systemd services.
+- [x] final PostgreSQL dump created and readable with `pg_restore -l`.
 
-## G — AWS readiness
-- [x] Define cost guardrails before execution.
-- [ ] Check execution-time service quotas.
-- [x] Define VPC/subnet/security-group target plan.
-- [x] Confirm no NAT Gateway/ALB/Multi-AZ RDS required for the lab proof.
-- [x] Confirm no application secret committed.
-- [x] Verify source outbound HTTPS reachability to AWS `us-east-1`.
-- [x] Check PostgreSQL CDC baseline (`wal_level`, slots, WAL senders).
-- [x] Preserve PostgreSQL config before CDC remediation.
-- [x] Plan AWS DMS Premigration Assessment before manual CDC changes.
-- [ ] Finalize secure DMS-to-source PostgreSQL connectivity mechanism.
-- [ ] Prepare/review Terraform if IaC is used for the target (`fmt`, `validate`, `plan`).
-- [ ] Review execution-time IAM/network exposure.
+## F — Clean VMware export
+- [x] source shut down cleanly.
+- [x] first export inspected.
+- [x] installer ISO detected in first OVF export.
+- [x] VMware CD/DVD device removed.
+- [x] clean second export created.
+- [x] final export contains OVF + MF + VMDK only.
+- [x] VMDK declared `streamOptimized`.
+- [x] VMDK size recorded (~3.4 GiB physical, 25 GiB virtual capacity).
 
-## H — Migration execution
-- [ ] Start paid-resource migration window and record starting cost/credits.
-- [ ] Capture final cutover source baseline.
-- [ ] Create target VPC/network/security foundation.
-- [ ] Create S3 migration target.
-- [ ] Create RDS PostgreSQL target.
-- [ ] Initialize MGN and install/activate replication agent.
-- [ ] Verify MGN source replication health.
-- [ ] Create DMS replication capacity/endpoints only when connectivity is ready.
-- [ ] Run DMS Premigration Assessment and capture finding.
-- [ ] Remediate required PostgreSQL CDC findings and reassess.
-- [ ] Run DMS Full Load + CDC.
-- [ ] Prove a controlled source change arrives in RDS through CDC.
-- [ ] Transfer operational files to S3.
-- [ ] Launch MGN test target and reconfigure application DB endpoint.
-- [ ] Execute smoke tests and record timing.
+## G — AWS VM Import staging
+- [x] AWS CLI identity verified as `mohammed-admin`.
+- [x] region fixed to `us-east-1` for the workflow.
+- [x] private S3 bucket `madar-vm-import-197821101770` created.
+- [x] Block Public Access configured.
+- [x] IAM role `vmimport` created.
+- [x] trust principal `vmie.amazonaws.com` configured.
+- [x] ExternalId `vmimport` configured.
+- [x] S3/EC2 import permissions attached to role.
+- [x] `iam:PassRole` policy simulation returned `allowed`.
+- [x] local Windows upload command started.
+- [ ] VMDK upload completed.
+- [ ] S3 object size verified.
 
-## I — Validation
-- [ ] Database row-count reconciliation.
-- [ ] Aggregate/value reconciliation.
-- [ ] Representative-record validation.
-- [ ] CDC shipment + event proof.
-- [ ] File-count/object-count validation.
-- [ ] SHA-256 comparison.
-- [ ] Application read/write tests on target.
-- [ ] Background-job test on target/replatformed path.
-- [ ] Restart/recovery, logging/monitoring and security checks.
+## H — ImportImage / AMI
+- [ ] create import container description.
+- [ ] start `aws ec2 import-image` with `vmimport` role.
+- [ ] record ImportTaskId.
+- [ ] monitor `describe-import-image-tasks`.
+- [ ] preserve any failure status message if import fails.
+- [ ] import task reaches `completed`.
+- [ ] resulting AMI ID recorded.
+- [ ] resulting snapshot ID(s) recorded.
 
-## J — Cutover & rollback
-- [ ] Freeze source writes for final cutover window.
-- [ ] Confirm DMS CDC caught up.
-- [ ] Execute cutover sequence and acceptance criteria.
-- [ ] Perform controlled rollback exercise where practical.
-- [ ] Validate source/rollback path.
-- [ ] Document continue/abort decision point.
+## I — Imported EC2 acceptance
+- [ ] choose account-eligible x86 instance type.
+- [ ] configure least-privilege security group.
+- [ ] launch imported AMI.
+- [ ] EC2 system/instance checks pass.
+- [ ] Linux boot verified.
+- [ ] LVM/filesystems verified.
+- [ ] `eth0`/DHCP/default route/DNS verified.
+- [ ] SSH/management path verified.
+- [ ] `systemctl --failed` reviewed.
+- [ ] PostgreSQL enabled/active.
+- [ ] `madar_legacy` database exists.
+- [ ] DB row-count/record reconciliation.
+- [ ] Flask health/read/write validation.
+- [ ] operational-file/job validation.
 
-## K — Post-cutover protection / failure exercise
-- [ ] Evaluate/enable AWS Backup for target resources where useful.
-- [ ] Confirm recovery point if AWS Backup is enabled.
-- [ ] Select credible controlled failure after target exists.
-- [ ] Label failure as CONTROLLED EXERCISE.
-- [ ] Capture detection, diagnosis, recovery and corrective improvement.
+## J — Database replatform to RDS
+- [ ] create private RDS PostgreSQL target.
+- [ ] create minimum suitable DMS capacity.
+- [ ] DMS source endpoint points to EC2 PostgreSQL.
+- [ ] target endpoint points to RDS.
+- [ ] run DMS Premigration Assessment.
+- [ ] capture CDC readiness finding.
+- [ ] remediate required PostgreSQL logical-replication settings.
+- [ ] reassess.
+- [ ] run Full Load + CDC.
+- [ ] reconcile RDS data.
+- [ ] controlled shipment + matching event reaches RDS via CDC.
 
-## L — Evidence gates
-- [ ] MGN source healthy/ready screenshot.
-- [ ] MGN replication screenshot.
-- [ ] DMS Premigration Assessment finding screenshot.
-- [ ] DMS reassessment screenshot.
-- [ ] DMS Full Load completion screenshot.
-- [ ] DMS CDC running screenshot.
-- [ ] Source write + target RDS CDC proof screenshots.
-- [ ] S3 objects + SHA-256 validation screenshots.
-- [ ] MGN test/target application screenshots.
-- [ ] Final cutover screenshot.
-- [ ] AWS Backup recovery point screenshot if enabled.
-- [ ] Cleanup/cost evidence screenshot.
+## K — File replatform
+- [ ] transfer approved operational files to S3.
+- [ ] object count reconciliation.
+- [ ] SHA-256/content verification.
+- [ ] scheduled report target disposition validated.
 
-## M — Closeout
-- [ ] Stop/delete DMS resources immediately after required proof.
-- [ ] Finalize/clean MGN migration resources.
-- [ ] Terminate temporary EC2 and delete unneeded EBS.
-- [ ] Delete lab RDS after final evidence if no longer needed.
-- [ ] Remove temporary public IPv4/network resources.
-- [ ] Clean temporary S3/VPC resources where appropriate.
-- [ ] Verify residual resources across service consoles.
-- [ ] Review actual cost/credit delta.
-- [ ] Update README outcome/risk register/master transformation repository.
-- [ ] Record Phase 04 trigger.
-- [ ] Final Git status clean and remote synchronized.
+## L — Cutover / rollback
+- [ ] final source/intermediate baseline captured.
+- [ ] writes frozen for cutover window.
+- [ ] CDC caught up.
+- [ ] Flask reconfigured to RDS securely.
+- [ ] acceptance criteria executed.
+- [ ] explicit continue/abort decision documented.
+- [ ] rollback path validated until acceptance.
+
+## M — Evidence
+- [x] source baseline/recoverability evidence.
+- [x] MGN replication evidence.
+- [x] MGN conversion failure + CloudTrail root cause.
+- [x] MGN cleanup evidence.
+- [x] VM compatibility preflight results recorded.
+- [x] clean export/file list and streamOptimized evidence recorded.
+- [x] S3 bucket + vmimport IAM preparation recorded.
+- [x] PassRole `allowed` result recorded.
+- [ ] completed VMDK upload evidence.
+- [ ] ImportImage progress/completion evidence.
+- [ ] AMI evidence.
+- [ ] imported EC2 validation evidence.
+- [ ] DMS/RDS CDC evidence.
+- [ ] file-integrity evidence.
+- [ ] final cutover evidence.
+- [ ] cleanup/cost evidence.
+
+## N — Cleanup / closeout
+- [ ] remove VM import VMDK after no longer needed.
+- [ ] clean temporary VM-import IAM/bucket resources if not retained.
+- [ ] terminate temporary EC2 after final purpose.
+- [ ] stop/delete DMS resources after proof.
+- [ ] delete lab RDS if fully tearing down.
+- [ ] clean unneeded AMI/EBS snapshots intentionally.
+- [ ] verify residual resources across service consoles.
+- [ ] review actual cost/credit delta.
+- [ ] finalize RTO/RPO and lessons learned.
+- [ ] update master transformation repository / next-phase trigger.
