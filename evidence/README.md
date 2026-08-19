@@ -1,20 +1,24 @@
 # Phase 03 Evidence Index
 
-Evidence exists to prove engineering claims. Screenshots are not collected as decoration, and planned evidence is not described as completed evidence.
+Evidence exists to prove engineering claims. Screenshots are not collected as decoration, and a planned checkpoint is never described as completed before it is actually observed.
 
-## Evidence naming rule
+## Security rule
 
-Use ordered, descriptive names so a reviewer can follow the migration chronologically without opening every file blindly.
+Before publishing evidence:
 
-```text
-NN-short-engineering-fact.png
-```
+- never expose passwords, private keys, session tokens or shell history containing secrets,
+- crop unrelated desktop content,
+- preserve errors when they explain an engineering decision,
+- keep VM images/database dumps outside Git,
+- prefer a focused screenshot that proves one fact clearly.
 
-Do not publish screenshots that expose passwords, private keys, session tokens, shell history containing secrets, or unrelated desktop content.
+---
 
-## Source baseline evidence
+# 1. Source workload evidence
 
-Representative local evidence includes:
+The source-lab screenshots prove that the VMware workload existed and had deterministic state before migration.
+
+Important files:
 
 ```text
 madar-legacy-vm-system-baseline.png
@@ -22,84 +26,148 @@ madar-legacy-vm-network-ssh.png
 madar-lvm-storage-expanded.png
 madar-base-os-patched.png
 madar-runtime-postgresql-installed.png
+madar-postgresql-database-role-created.png
+madar-postgresql-schema-created.png
 madar-deterministic-dataset-baseline.png
 madar-application-dashboard.png
-madar-source-files-sha256-baseline.png
-madar-cron-background-job-verified.png
 madar-application-write-path-verified.png
-madar-source-baseline-restored.png
+madar-cron-background-job-verified.png
+madar-source-files-sha256-baselin.png
 madar-pre-migration-db-backup-verified-v2.png
 madar-pre-migration-files-backup-verified.png
+madar-final-pre-migration-snapshot.png
 ```
 
-These prove the original VMware workload, deterministic `10 / 50 / 150` database baseline, application behavior and recoverability before migration.
+### Representative application baseline
 
-## MGN experiment evidence
+![MADAR application dashboard](madar-application-dashboard.png)
 
-Retain evidence showing:
+### Deterministic migration baseline
+
+![Deterministic dataset](madar-deterministic-dataset-baseline.png)
+
+### Pre-migration database recovery point
+
+![Pre-migration DB backup](madar-pre-migration-db-backup-verified-v2.png)
+
+---
+
+# 2. AWS MGN experiment evidence
+
+The MGN screenshots are retained because they prove the first strategy was actually tested rather than invented after the fact.
 
 ```text
-MGN source server -> 25/25 GiB replicated
-MGN status -> Healthy / Ready for testing
-MGN launch history -> snapshot success / conversion failure
-CloudTrail RunInstances -> m5.large Conversion Server
-AWS Transform response -> conversion-server type not configurable
-EC2 -> replication server terminated
-MGN -> zero active source servers after cleanup
-EBS/Snapshot -> residual resources cleaned
+mgn-source-server-discovery-details.png
+mgn-initial-replication-initiating.png
+mgn-initial-sync-100-percent-finalizing-snapshot.png
+mgn-ready-for-testing-healthy-replication.png
+mgn-launch-template-t3-small-created.png
+mgn-launch-template-t3-small-default.png
 ```
 
-This supports the ADR that the visible `t3.small` target was not the failing resource.
+The key visual checkpoint is:
 
-## VM Import/Export evidence
+![MGN Healthy / Ready for testing](mgn-ready-for-testing-healthy-replication.png)
 
-Completed engineering checkpoints include:
+These images support the documented MGN story: source discovery and block replication succeeded, while test conversion later failed in a different service-managed compute layer. CloudTrail/root-cause text is documented in the ADR and interview guide.
+
+---
+
+# 3. VM Import/Export evidence
+
+The final rehost path was EC2 VM Import/Export.
+
+Important files:
 
 ```text
-03-vmimport-role-trust.png
-04-vmimport-role-permissions.png
-05-vm-import-converting-09-percent.png
-06-vm-import-updating-43-percent.png
-07-vm-import-booting-62-percent.png
-08-vm-import-completed-ami-created.png
-09-imported-ami-available.png
-10-ec2-imported-vm-running.png
-11-ec2-status-checks-passed.png
-12-ssh-success-migrated-ubuntu.png
-13-post-migration-workload-validation.png
-14-rehost-database-validation-pass.png
-15-flask-running-on-migrated-ec2.png
-16-migrated-application-api-validation-pass.png
-17-postgresql-cdc-ready.png
+vmdk-in-s3.png
+vmimport-role-permissions.png
+vm-import-converting.png
+vm-import-updating-43-percent.png
+vm-import-booting-62-percent.png
+vm-import-completed-ami-created.png
+imported-ami-available.png
+ec2-imported-vm-running.png
+ec2-status-checks-passed.png
+ssh-success-migrated-ubuntu.png
+post-migration-workload-validation.png
+rehost-database-validation-pas.png
+flask-running-on-migrated-ec2.png
+migrated-application-api-validation-pass.png
 ```
 
-Important facts represented by this group:
+### VMDK staged in private S3
 
-- the import role has a service trust relationship and explicit permissions,
-- the asynchronous VM Import task progressed through conversion/update/boot phases,
-- import completed with an AMI and EBS snapshot,
-- imported EC2 booted and passed AWS status checks,
-- Linux networking changed from VMware `192.168.14.x` to VPC `172.31.x.x`,
-- NVMe/LVM/filesystem state survived the hypervisor move,
-- PostgreSQL 16.14 remained healthy,
-- initial `10 / 50 / 150` data reconciled,
-- Flask health/summary passed after runtime configuration was restored,
-- source PostgreSQL was prepared for logical CDC.
+![VMDK in S3](vmdk-in-s3.png)
 
-## DMS / RDS evidence — COMPLETED THROUGH CDC
+### Import task progress
 
-### 18 — RDS target available
+![VM Import converting](vm-import-converting.png)
+
+![VM Import booting](vm-import-booting-62-percent.png)
+
+### Import completed and AMI created
+
+![VM Import complete](vm-import-completed-ami-created.png)
+
+### Imported AMI available
+
+![AMI available](imported-ami-available.png)
+
+### Imported EC2 instance healthy
+
+![EC2 status checks](ec2-status-checks-passed.png)
+
+### Workload validation after hypervisor migration
+
+![Post-migration workload validation](post-migration-workload-validation.png)
+
+### Flask/API validation
+
+![Migrated API validation](migrated-application-api-validation-pass.png)
+
+This group proves more than `EC2 running`: it captures Linux boot, VPC DHCP, NVMe/LVM survival, PostgreSQL 16.14, deterministic data reconciliation and Flask application health.
+
+---
+
+# 4. PostgreSQL CDC preparation
+
+File:
 
 ```text
-18-rds-postgresql-target-available.png
+postgresql-cdc-ready.png
 ```
 
-Should show the private RDS PostgreSQL target in `available` state with the intended instance class/version. The target is PostgreSQL 16.14 on `db.t3.micro`, `PubliclyAccessible=false`.
-
-### 19 — DMS replication instance available
+Observed state:
 
 ```text
-19-dms-replication-instance-available.png
+wal_level              logical
+max_replication_slots  10
+max_wal_senders        10
+```
+
+![PostgreSQL CDC ready](postgresql-cdc-ready.png)
+
+---
+
+# 5. RDS / DMS evidence
+
+The actual screenshot filenames currently stored in this directory are intentionally used below; README links should point to these exact paths.
+
+## RDS target available
+
+```text
+ds-postgresql-target-available.png
+```
+
+> The filename was uploaded as `ds-postgresql-target-available.png`; the evidence itself represents the RDS PostgreSQL target.
+
+![RDS PostgreSQL target available](ds-postgresql-target-available.png)
+
+## DMS replication instance available
+
+```text
+dms-replication-instance-available.png
 ```
 
 Captured facts:
@@ -110,77 +178,52 @@ Private IP  172.31.13.46
 Status      available
 ```
 
-This proves the private DMS compute node was provisioned successfully after fixing the `dms-vpc-role` prerequisite.
+![DMS replication instance](dms-replication-instance-available.png)
 
-### 20 — Source endpoint connection successful
-
-```text
-20-source-endpoint-connection-success.png
-```
-
-Expected/captured fact:
+## Source endpoint test successful
 
 ```text
-madar-postgres-source | Failure=None | Status=successful
+source-endpoint-connection-success.png
 ```
 
-This proves DMS can connect to PostgreSQL on the migrated EC2 source.
+![Source endpoint success](source-endpoint-connection-success.png)
 
-### 21 — Target endpoint connection successful
+## Target endpoint test successful
 
 ```text
-21-target-endpoint-connection-success.png
+target-endpoint-connection-success.png
 ```
 
-Expected/captured fact:
+![Target endpoint success](target-endpoint-connection-success.png)
+
+The successful target screenshot follows two useful troubleshooting states documented in `docs/09-dms-rds-execution-guide.md`: first RDS rejected an unencrypted connection, then it rejected a credential mismatch. The final endpoint used SSL and a synchronized credential.
+
+## Full Load completed
 
 ```text
-madar-postgres-target | Failure=None | Status=successful
+dms-full-load-completed.png
 ```
 
-Troubleshooting evidence before the successful screenshot is also valuable in documentation:
-
-```text
-failure 1: no encryption
-fix:      DMS target endpoint ssl-mode=require
-
-failure 2: password authentication failed
-fix:      synchronize RDS/DMS target credentials
-
-final:    successful
-```
-
-Do not publish a screenshot containing the actual password or a command line that exposes it.
-
-### 22 — DMS Full Load completed
-
-```text
-22-dms-full-load-completed.png
-```
-
-Important facts:
+Expected/observed task facts:
 
 ```text
 FullLoadProgress  100
-Status            running
 TablesLoaded      3
-TablesLoading     0
 TablesErrored     0
-
-customers         Table completed   10
-shipments         Table completed   50
-shipment_events   Table completed   150
+customers         10 rows
+shipments         50 rows
+shipment_events   150 rows
 ```
 
-`running` after 100% is expected because this is a `full-load-and-cdc` task; DMS remains active to capture changes.
+![DMS Full Load](dms-full-load-completed.png)
 
-### 23 — CDC replication proof
+## CDC controlled-change proof
 
 ```text
-23-cdc-replication-proof.png
+cdc-replication-proof.png
 ```
 
-Controlled source change:
+The controlled change was a new source customer after Full Load:
 
 ```text
 customer_id   11
@@ -188,65 +231,90 @@ company_name  MADAR CDC TEST CUSTOMER
 region        Riyadh
 ```
 
-The same row appeared in RDS **without rerunning Full Load**, proving CDC from source WAL through DMS to the target.
+The same record appeared on RDS without rerunning Full Load.
 
-### 24 — Final data reconciliation
+![CDC replication proof](cdc-replication-proof.png)
 
-```text
-24-final-data-reconciliation.png
-```
-
-Final RDS counts:
+## Final RDS reconciliation
 
 ```text
-customers         11
-shipments         50
-shipment_events   150
+final-data-reconciliation.png
 ```
 
-This is the final Stage 2 data-integrity checkpoint after the controlled CDC insert.
-
-## Screenshot placement guidance
-
-Recommended repository layout if the actual image files are added from the workstation:
+Final target counts:
 
 ```text
-evidence/
-├── vm-import/
-│   ├── 03-vmimport-role-trust.png
-│   ├── 04-vmimport-role-permissions.png
-│   ├── ...
-│   └── 17-postgresql-cdc-ready.png
-└── dms-rds/
-    ├── 18-rds-postgresql-target-available.png
-    ├── 19-dms-replication-instance-available.png
-    ├── 20-source-endpoint-connection-success.png
-    ├── 21-target-endpoint-connection-success.png
-    ├── 22-dms-full-load-completed.png
-    ├── 23-cdc-replication-proof.png
-    └── 24-final-data-reconciliation.png
+customers        11
+shipments        50
+shipment_events  150
 ```
 
-The connected GitHub text interface used during this session can update Markdown and code files but does not provide a general binary-image upload action. Therefore this index records the exact intended filenames/locations; the screenshot binaries themselves should be copied into those paths from the workstation before final portfolio publication.
+![Final data reconciliation](final-data-reconciliation.png)
 
-## Evidence still required
+---
 
-### File/cutover/closeout
+# 6. Curated reviewer path
 
-- S3 operational-file integrity validation,
-- final application cutover decision,
-- Flask-to-RDS validation if an actual DB cutover is executed,
-- rollback proof where practical,
-- cleanup/residual-resource review,
-- actual cost/credit delta,
-- final RTO/RPO narrative.
+A reviewer does not need to open every screenshot. The shortest evidence story is:
 
-## Quality and security rules
+```text
+1. madar-application-dashboard.png
+   -> legacy business workload exists
 
-- never publish credentials, tokens, `.pgpass`, `.env`, private keys or raw session credentials,
-- never publish shell history showing database passwords,
-- VM images and database backups remain outside Git,
-- review screenshots for account-sensitive identifiers and unrelated desktop content,
-- crop evidence to the engineering fact being demonstrated,
-- preserve failures and status messages when they explain a decision,
-- never mark a planned gate as passed merely because a command was started.
+2. madar-deterministic-dataset-baseline.png
+   -> known pre-migration data baseline
+
+3. mgn-ready-for-testing-healthy-replication.png
+   -> first MGN strategy genuinely progressed
+
+4. vmdk-in-s3.png
+   -> clean fallback artifact staged in AWS
+
+5. vm-import-completed-ami-created.png
+   -> VM Import/Export completed
+
+6. ec2-status-checks-passed.png
+   -> imported machine passed EC2 infrastructure checks
+
+7. migrated-application-api-validation-pass.png
+   -> workload itself passed after rehost
+
+8. postgresql-cdc-ready.png
+   -> source prepared for logical CDC
+
+9. ds-postgresql-target-available.png
+   -> private RDS target exists
+
+10. dms-replication-instance-available.png
+    -> migration compute ready
+
+11. source-endpoint-connection-success.png
+12. target-endpoint-connection-success.png
+    -> both sides reachable by DMS
+
+13. dms-full-load-completed.png
+    -> initial 10/50/150 load completed with zero table errors
+
+14. cdc-replication-proof.png
+    -> new source change replicated automatically
+
+15. final-data-reconciliation.png
+    -> final RDS state reconciled
+```
+
+The top-level `README.md` embeds this curated path directly so the project can be understood visually without browsing the evidence folder first.
+
+---
+
+# 7. Evidence not yet complete
+
+The two major compute/database migration stages are complete. Remaining evidence belongs to later closeout work:
+
+```text
+operational files -> S3 integrity validation
+application cutover to RDS
+final rollback/accept decision
+cleanup / residual resource review
+actual cost or AWS-credit delta
+final RTO/RPO closeout
+```
