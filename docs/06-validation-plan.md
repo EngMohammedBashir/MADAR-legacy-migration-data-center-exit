@@ -2,127 +2,184 @@
 
 ## Principle
 
-A migrated workload is not trusted because the application homepage opens. Validation compares the AWS destination against the recorded source baseline and proves both static integrity and live change replication.
+A migration is not trusted because an AMI exists or an EC2 instance reaches `running`. Validation compares the target against the recorded source baseline and proves boot, network, application and data integrity.
 
-## Frozen source baseline
-
-The deterministic pre-migration baseline is:
+## Source baseline
 
 ```text
-Customers:        10
-Shipments:        50
-Shipment events: 150
+Customers        10
+Shipments        50
+Shipment events  150
+Database         madar_legacy
+PostgreSQL       16.14
+Representative tables
+├── public.customers
+├── public.shipments
+└── public.shipment_events
 ```
 
-Shipment 3 is restored to `IN_TRANSIT` after the earlier controlled write-path proof.
+An independent PostgreSQL custom-format dump exists and was validated with `pg_restore -l`.
 
-## Database validation
+## Gate 1 — VM import artifact
 
-Before cutover, capture the final source state. After DMS Full Load:
+Before `ImportImage`:
 
+- clean export contains no attached installer ISO,
+- VMDK is `streamOptimized`,
+- S3 object name/size matches the local export,
+- S3 bucket is private,
+- `vmimport` role exists and trusts `vmie.amazonaws.com`,
+- role has required S3/image permissions,
+- operator `iam:PassRole` decision is `allowed`.
+
+Pass condition: the artifact and permissions are known before asynchronous import begins.
+
+## Gate 2 — ImportImage task
+
+Record:
+
+- `ImportTaskId`,
+- status transitions,
+- progress percentage,
+- status message if any,
+- resulting AMI ID,
+- related snapshot ID(s).
+
+Do not call the import successful until task status is `completed` and an AMI is returned. If it fails, preserve the exact status message and troubleshoot the failing layer rather than repeatedly restarting the task.
+
+## Gate 3 — EC2 boot acceptance
+
+After launching the imported AMI:
+
+```text
+Instance running
+      ↓
+EC2 system/instance checks pass
+      ↓
+Linux boots
+      ↓
+network interface obtains DHCP
+      ↓
+default route/DNS work
+      ↓
+management access works
+```
+
+Validate:
+
+- boot completes without emergency mode,
+- expected root and `/boot` filesystems mount,
+- LVM volume group/logical volume activate,
+- network interface is usable,
+- DHCP address/default route exist,
+- SSH or selected management path works,
+- no unexpected failed systemd services.
+
+## Gate 4 — OS and service reconciliation
+
+Confirm target identity/runtime:
+
+- Ubuntu release and kernel,
+- expected hostname/host configuration disposition,
+- PostgreSQL 16.14 starts automatically,
+- Flask/application files exist,
+- expected operational data directories exist,
+- scheduled-job configuration has an explicit target disposition.
+
+## Gate 5 — Database reconciliation
+
+On the imported EC2 source, verify:
+
+- `madar_legacy` exists,
 - expected schema/tables exist,
-- row counts match the expected source state,
+- baseline row counts match,
+- representative records match,
 - representative aggregate values match,
-- representative records match by ID,
-- expected constraints/indexes are present where applicable,
-- no unexplained records are missing or duplicated.
+- no unexplained duplicate/missing records exist.
 
-### CDC proof
+The independent dump is a recovery layer, not evidence that the disk-level migration itself succeeded.
 
-The key live-migration experiment is:
+## Gate 6 — Application validation
 
-```text
-SOURCE PostgreSQL
-shipment 3 = IN_TRANSIT
-        |
-        | Flask PATCH write
-        v
-shipment 3 = DELIVERED
-        |
-        | PostgreSQL WAL / DMS CDC
-        v
-TARGET RDS PostgreSQL
-shipment 3 = DELIVERED
-```
-
-The test must also verify that the matching shipment event is replicated. This demonstrates that the target is not merely a one-time copy; DMS is capturing source changes while CDC is active.
-
-## File validation
-
-- source file count recorded,
-- expected object count checked after transfer,
-- SHA-256 manifest comparison passes for immutable baseline files,
-- representative files can be retrieved/read,
-- object naming/prefix structure is correct,
-- no migration is declared successful merely because an upload command returned success.
-
-## Application validation
-
-On the migrated target:
-
-- application starts,
+- application process starts,
 - `/api/health` passes,
 - `/api/summary` returns expected values,
-- representative customer/shipment reads work,
-- a controlled shipment status update works,
-- database write persists in RDS after endpoint reconfiguration,
-- shipment event insertion remains transactional with the status update,
+- representative reads succeed,
+- controlled shipment write succeeds,
+- shipment event insertion remains transactional,
 - expected logs are generated.
 
-## Scheduled/background processing
+## Gate 7 — DMS/RDS database replatform
 
-- scheduled report mechanism is reconfigured for the target database/storage path,
-- one controlled execution completes,
-- expected report is generated,
-- log reports success,
-- source cron remains available until target acceptance.
+Only after imported EC2 acceptance:
 
-## Operational validation
+1. create private RDS target,
+2. run DMS Premigration Assessment,
+3. record known CDC readiness findings,
+4. remediate only required source settings,
+5. reassess,
+6. run Full Load + CDC,
+7. reconcile target data,
+8. prove a new source shipment/event change arrives on RDS.
 
-- required inbound/outbound network flows work,
-- RDS has no unintended public exposure,
-- management access works through the selected target administration path,
+CDC proof:
+
+```text
+EC2 PostgreSQL
+shipment 3 = IN_TRANSIT
+      |
+      | controlled application write
+      v
+shipment 3 = DELIVERED + matching event
+      |
+      | DMS CDC
+      v
+RDS PostgreSQL
+same shipment/event state
+```
+
+## Gate 8 — File validation
+
+- source file count recorded,
+- target object count matches expected scope,
+- SHA-256 validation passes for immutable baseline files,
+- representative files can be retrieved/read,
+- naming/prefix structure is correct.
+
+## Operational/security validation
+
+- no unintended PostgreSQL Internet exposure,
+- import S3 bucket remains private,
+- temporary SSH/app ingress is narrow,
 - restart/reboot behavior is tested where practical,
 - monitoring/logging visibility is checked,
-- post-cutover backup/recovery point is confirmed if AWS Backup is enabled,
-- rollback trigger and owner are understood.
+- rollback anchor remains available until acceptance,
+- temporary migration resources are inventoried for cleanup.
 
-## Screenshot / evidence gates
+## Evidence gates
 
-The operator should stop for evidence at these points:
+Capture evidence for:
 
-1. source legacy application/baseline,
-2. MGN source server ready/healthy,
-3. MGN replication status,
-4. DMS Premigration Assessment finding before CDC remediation,
-5. DMS reassessment after remediation,
-6. DMS Full Load completed,
-7. DMS CDC running,
-8. source shipment change,
-9. matching target RDS shipment/event change via CDC,
-10. S3 migrated objects,
-11. SHA-256 file-integrity validation,
-12. MGN test instance,
-13. application functional on AWS,
-14. final cutover state,
-15. AWS Backup recovery point if enabled,
-16. cleanup/cost evidence.
-
-Binary screenshots remain local until reviewed for credentials, account-sensitive information and unrelated desktop content.
+1. source baseline and independent backup validation,
+2. MGN replication success,
+3. MGN test-conversion failure and CloudTrail root cause,
+4. MGN cleanup,
+5. EC2 compatibility preparation (`eth0`, DHCP, drivers, GRUB, services),
+6. clean VMware export and `streamOptimized` declaration,
+7. private S3 staging bucket,
+8. `vmimport` IAM role and PassRole authorization,
+9. completed S3 VMDK upload,
+10. ImportImage task/progress/completion,
+11. resulting AMI,
+12. imported EC2 boot/system checks,
+13. PostgreSQL/data reconciliation,
+14. application functional test,
+15. DMS assessment/reassessment,
+16. Full Load + CDC proof,
+17. file integrity proof,
+18. final cutover/rollback decision,
+19. cleanup/cost evidence.
 
 ## Pass/fail rule
 
-Do not call the migration successful while unexplained integrity differences remain. Either reconcile them, explicitly accept them with justification, or roll back.
-
-## Acceptance criteria
-
-Phase 03 passes only when:
-
-- database reconciliation succeeds,
-- CDC change proof succeeds,
-- operational-file integrity succeeds,
-- target application read/write paths succeed,
-- scheduled processing succeeds or has an explicitly accepted migration disposition,
-- security exposure is reviewed,
-- rollback remains viable until acceptance,
-- paid temporary resources are cleaned up after evidence capture.
+Unexplained differences are failures until reconciled or explicitly accepted with justification. The project never converts a warning into a success claim simply to make the portfolio look cleaner.
