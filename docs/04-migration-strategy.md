@@ -2,19 +2,24 @@
 
 ## Decision summary
 
-Discovery showed that the representative legacy VM contains several logical workload components with different state and operational characteristics. The project uses a **staged component-level migration strategy** rather than trying to connect AWS DMS directly to PostgreSQL behind the local VMware NAT network.
+The representative legacy VM contains several logical components with different state and operational characteristics. The migration therefore uses a staged component-level strategy rather than pretending the entire VM should remain unchanged forever.
 
-## Approved staged strategy
+The original Stage 1 rehost mechanism was AWS Transform MGN. MGN replication succeeded, but test conversion was blocked by a Free Plan restriction on a service-managed `m5.large` conversion server that cannot be overridden. The accepted rehost mechanism is now **EC2 VM Import/Export**.
+
+## Current staged strategy
 
 ```text
-Stage 1 — Data-center exit / Rehost
+Stage 1 — Rehost / data-center exit
 
 VMware MADAR-LEGACY-01
 Ubuntu + Flask + PostgreSQL + files
               |
-              | AWS MGN
+              | clean VMDK export -> S3 -> EC2 ImportImage
               v
-AWS EC2 temporary migrated server
+Amazon Machine Image (AMI)
+              |
+              v
+EC2 temporary migrated server
 Ubuntu + Flask + PostgreSQL + files
 
 Stage 2 — Database replatform
@@ -34,74 +39,96 @@ EC2 operational CSV/reports
 Amazon S3
 ```
 
-This sequencing removes the need for AWS DMS to reach the private VMware address `192.168.14.128` directly. MGN first brings the representative server into AWS. DMS then works from the temporary PostgreSQL source on EC2 to the managed RDS target inside the AWS network design.
-
 ## Component decisions
 
-| Source component | Disposition | AWS target | Migration mechanism / approach | Reason |
+| Source component | Disposition | AWS target | Mechanism | Reason |
 |---|---|---|---|---|
-| Ubuntu + Flask application | Rehost | Amazon EC2 | AWS Application Migration Service (MGN) | Preserves the legacy runtime with minimal application change and establishes the first AWS landing point |
-| PostgreSQL 16 | Replatform after rehost | Amazon RDS for PostgreSQL | AWS DMS Full Load + CDC from migrated EC2 PostgreSQL | Moves state to a managed database after the server is reachable inside AWS |
-| Small operational CSV/files | Replatform | Amazon S3 | Controlled copy with checksum validation | Dataset is tiny; a dedicated transfer service would add unnecessary complexity |
-| Scheduled report job | Modest replatform | Initially retained with migrated application, then pointed at target DB/storage | Reconfigure DB endpoint/output destination | Preserves behavior while dependencies move |
-| SSH administration | Modernize operations | AWS Systems Manager Session Manager where practical | AWS-native management path | Reduces reliance on inbound SSH |
+| Ubuntu + Flask runtime | Rehost first | EC2 | EC2 VM Import/Export | Preserves the actual VMware machine image while avoiding the MGN managed-conversion blocker |
+| PostgreSQL 16 | Replatform after EC2 acceptance | RDS PostgreSQL | DMS Full Load + CDC | Separates high-value state from host lifecycle and demonstrates managed-database migration |
+| Operational CSV/reports | Replatform | S3 | Validated copy + SHA-256 | Dataset is small; DataSync would be unnecessary overhead for this lab |
+| Scheduled report job | Reconfigure | target DB/storage path | Retain behavior then point dependencies to AWS target | Avoids rewriting the workload during the rehost step |
+| SSH administration | Modernize where practical | SSM Session Manager | AWS-native management path | Reduces long-term inbound administration exposure |
 
-## Why MGN comes before DMS
+## Why VM Import/Export is now Stage 1
 
-The source PostgreSQL currently listens on loopback inside a VMware NAT network. Direct AWS DMS access would require an additional secure connectivity design such as private connectivity or a temporary tunnel. For this representative lab, that infrastructure would add cost and troubleshooting without strengthening the migration hypothesis.
-
-MGN solves the first problem: move the server/runtime into AWS using source-initiated replication. Once PostgreSQL is on EC2, DMS can solve the second problem: replatform the database into RDS and keep changes synchronized with CDC.
+The objective is still a real rehost: move the existing VMware server image, not install a fresh Ubuntu instance and call it migrated.
 
 ```text
-MGN = move the house into AWS
-DMS = move the database out of that house into managed RDS
-CDC = keep new database changes synchronized during transition
+VMware disk
+   -> clean stream-optimized VMDK
+   -> private S3 staging
+   -> VM Import/Export
+   -> EBS-backed AMI
+   -> EC2
 ```
 
-## Why MGN and DMS both remain necessary
+The `vmimport` IAM service role is the permission boundary that lets `vmie.amazonaws.com` read the staged disk and perform the required image/snapshot operations. The operator's `iam:PassRole` authorization is independently checked before import.
 
-MGN does not turn PostgreSQL into RDS. It rehosts the source machine. DMS does not migrate the Flask/Ubuntu server. It migrates and synchronizes database data. The staged design deliberately uses each service for the problem it is designed to solve.
+## MGN: evaluated, proven, then rejected for this account plan
 
-## File-transfer decision and DataSync alternative
+MGN was not abandoned because replication failed. It successfully demonstrated agent-based block replication:
 
-The representative MADAR file estate is only a small collection of CSV exports/reports. AWS DataSync was evaluated but rejected for this lab because deploying a dedicated transfer workflow for a few small files would be overengineering.
+- 25/25 GiB replicated,
+- initial replication completed,
+- healthy / ready-for-testing state,
+- snapshot creation completed during test launch.
 
-For a real independent file estate measured in large GB/TB/PB ranges, AWS DataSync would be a strong candidate for online transfer to S3/EFS/FSx. Very large offline-transfer requirements would trigger a separate evaluation of the currently available AWS bulk/offline data-transfer options. The project does not claim that MGN is the preferred bulk-file migration service.
+The failure occurred in a different layer: MGN's managed conversion server. CloudTrail showed `m5.large`; AWS Transform confirmed that this instance type is not customer-configurable. Repeating replication or changing the final target instance type would therefore not address the root cause.
 
-## Alternatives rejected
+Engineering decision: preserve the evidence, clean the temporary MGN resources, and change the rehost mechanism instead of changing the account plan.
+
+## Why DMS still comes after rehost
+
+The original source PostgreSQL is local to the VMware host (`127.0.0.1:5432`) and the VMware NAT address is not a directly routable AWS source. Once the full server is on EC2, DMS can use the EC2-hosted PostgreSQL source inside the AWS networking design.
+
+Mental model:
+
+```text
+VM Import/Export = move the house into AWS
+DMS              = move the database out of the house into managed RDS
+CDC              = keep database changes synchronized during transition
+```
+
+## Alternatives considered
+
+### Upgrade the AWS account and continue MGN
+
+Technically viable but rejected for this lab. The project does not change billing/account risk simply to bypass a managed service constraint.
+
+### Change MGN target to another Free-Plan instance
+
+Rejected as irrelevant to the observed failure. The target was not the resource that failed.
+
+### Fresh Ubuntu EC2 rebuild
+
+Rejected as the primary rehost proof. It would demonstrate rebuild/redeploy, not migration of the existing VMware image.
 
 ### Direct DMS from AWS to VMware PostgreSQL
 
-Rejected for this lab because the source is behind VMware NAT and PostgreSQL is loopback-only. Secure connectivity could be built, but it is unnecessary once the server is staged into AWS with MGN.
+Rejected because the current source is loopback-only behind VMware NAT. A secure connectivity design is possible, but unnecessary if the server first lands in EC2.
 
-### Rehost the entire VM and leave PostgreSQL permanently on EC2
+### Leave PostgreSQL permanently on EC2
 
-Rejected as the final target because it preserves database administration, patching, local-disk coupling and the single-host failure domain. EC2 PostgreSQL is only an intermediate migration state.
+Rejected as the final architecture. It preserves patching, backup and host-coupling responsibilities that the RDS replatform track is intended to remove.
 
-### AWS DataSync for the tiny representative file set
+### DataSync for the tiny file estate
 
-Rejected as unnecessary infrastructure for the current data volume. It remains the preferred class of AWS-native service to evaluate when the independent file estate is large.
-
-### Refactor Flask immediately
-
-Rejected for this phase. The objective is migration/data-center exit with controlled modernization, not an application rewrite.
-
-### Containers/serverless during migration
-
-Rejected because too many simultaneous architectural changes would make migration failures harder to attribute.
+Rejected as overengineering for the current data volume. It remains a valid service to evaluate for a large independent file estate.
 
 ## Cutover principle
 
-The original VMware source remains the rollback anchor through the initial MGN stage. After the EC2 source is validated and DMS Full Load + CDC is active, final cutover reconciles database state, representative records, operational files, application read/write behavior and scheduled processing. The source is not destroyed before acceptance.
+The original VMware VM remains a rollback anchor until the imported EC2 workload is validated. No source is destroyed merely because an AMI exists or an EC2 instance reaches `running`.
 
-## Implementation gate
+Acceptance requires:
 
-Before creating paid migration resources:
+- boot/network/management validation,
+- PostgreSQL service and data reconciliation,
+- Flask read/write validation,
+- operational-file validation,
+- DMS/RDS acceptance when Stage 2 begins,
+- explicit continue/abort decision,
+- cleanup only after rollback is no longer required.
 
-1. approved staged MGN -> EC2 -> DMS -> RDS sequence,
-2. VPC/subnet/security-group plan approved,
-3. source outbound AWS connectivity verified,
-4. PostgreSQL CDC baseline recorded and configuration backed up,
-5. DMS Premigration Assessment planned after EC2 source is available,
-6. small-file S3 transfer/checksum plan defined,
-7. cost, evidence, rollback and cleanup plans defined.
+## Cost and risk principle
+
+Migration tooling is evaluated end-to-end. A visible target instance being inexpensive/free is not sufficient if a managed workflow launches hidden non-eligible compute. Credits are treated as real money and temporary migration infrastructure is kept narrowly scoped.
