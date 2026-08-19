@@ -2,161 +2,248 @@
 
 ## Purpose
 
-Ordered guide for a short-lived AWS migration window. Preparation is completed before paid resources are created.
+Ordered execution guide for the actual Phase 03 path. It records both the abandoned MGN path and the active VM Import/Export path so the repository tells the truth about what happened.
 
 ## Mental model
 
 ```text
-1. MGN   : VMware server -> EC2
-2. DMS   : EC2 PostgreSQL -> RDS (Full Load + CDC)
-3. S3    : small operational files -> S3
-4. Validate
-5. Cut over
-6. Protect target
-7. Clean up
+1. Prepare/export VMware VM
+2. Upload clean VMDK to private S3
+3. VM Import/Export -> AMI
+4. Launch/validate EC2
+5. DMS -> RDS
+6. Files -> S3
+7. Cut over / validate / roll back if required
+8. Clean up
 ```
 
-## Cost clock rule
+## Phase A — Source safety gate
 
-Do not create paid migration resources until the operator explicitly starts the migration session. Check Billing/credits first, record the start time, create each paid component only when needed, and remove temporary resources as soon as their evidence purpose is complete.
+Confirm before migration image work:
 
-## Phase A — Pre-execution gate
+- source VM healthy,
+- deterministic DB baseline known,
+- final PostgreSQL dump readable with `pg_restore -l`,
+- operational-file backup/checksums retained,
+- ENA/NVMe drivers present,
+- GRUB/BIOS boot path verified,
+- `eth0` + DHCP configuration proven after reboot,
+- SSH and PostgreSQL enabled at boot,
+- zero unexplained failed services,
+- VMware source remains available as rollback anchor.
 
-Confirm:
+## Phase B — Historical MGN result
 
-- source VM/application healthy,
-- deterministic source baseline known,
-- PostgreSQL dump exists,
-- PostgreSQL configuration backup exists,
-- operational-file SHA-256 baseline exists,
-- source outbound HTTPS to AWS works,
-- staged target architecture approved,
-- no credentials/secrets committed,
-- original VMware source remains the rollback anchor.
+MGN was attempted first and must not be repeated under the current account plan:
 
-## Phase B — Minimal AWS foundation
+```text
+Replication        25/25 GiB / Healthy / Ready for testing
+Test snapshot      succeeded
+Conversion         failed
+Failing resource   MGN service-managed Conversion Server
+Requested type     m5.large
+Account result     Free Plan rejected the instance type
+Root cause         confirmed via CloudTrail + AWS Transform
+```
 
-1. Check current credits/cost and record start time.
-2. Confirm `us-east-1` and required quotas.
-3. Create VPC `10.30.0.0/16`.
-4. Create application subnet `10.30.1.0/24`.
-5. Create private DB subnets `10.30.11.0/24` and `10.30.12.0/24` in separate AZs.
-6. Configure only required routing/Internet Gateway for the lab landing path.
-7. Create narrowly scoped security groups.
-8. Do not create NAT Gateway or ALB for this migration proof.
+Do not attempt to solve this by changing the target launch-template type. The target was not the failing compute resource.
 
-## Phase C — Stage 1: MGN rehost
+MGN temporary resources were cleaned after the decision to pivot.
 
-1. Initialize AWS Application Migration Service in `us-east-1`.
-2. Use the AWS-provided MGN workflow to install/activate the replication agent on `MADAR-LEGACY-01`.
-3. Confirm the source server appears in MGN.
-4. Wait for replication to reach healthy/ready state.
-5. **SCREENSHOT NOW:** MGN source health/replication evidence.
-6. Launch an MGN test instance.
-7. Verify Ubuntu, Flask, PostgreSQL and required local files exist on the EC2 test target.
-8. Verify the application works against its still-local PostgreSQL database on EC2.
-9. Keep the original VMware source intact.
+## Phase C — Clean VMware export
 
-At this point the workload has exited the local data center into an intermediate AWS EC2 state.
+1. Shut down `MADAR-LEGACY-01` cleanly.
+2. Ensure the Ubuntu installation ISO/CD-ROM is detached.
+3. Export from VMware Workstation using **File -> Export to OVF**.
+4. Inspect resulting files.
+5. Confirm no `.iso` is included in the final artifact.
+6. Inspect the OVF and verify the disk format is `streamOptimized`.
+7. Keep the original VMware VM untouched as rollback source.
 
-## Phase D — Stage 2 foundation: RDS + DMS
+Verified clean artifact for this lab:
 
-Only after the EC2 source is healthy:
+```text
+MADAR-LEGACY-01.ovf
+MADAR-LEGACY-01.mf
+MADAR-LEGACY-01-disk1.vmdk
+```
 
-1. Create Single-AZ RDS PostgreSQL using the smallest approved lab class available at execution.
-2. Confirm RDS is private.
-3. Allow PostgreSQL traffic only across the required EC2/DMS/RDS security-group paths.
-4. Create the selected minimum DMS replication capacity.
-5. Define the source endpoint as PostgreSQL on the migrated EC2 server.
-6. Define the target endpoint as RDS PostgreSQL.
-7. Test endpoint connectivity.
+## Phase D — AWS import staging
 
-This staged design avoids direct DMS connectivity to the private VMware `192.168.14.128` source.
+### 1. Identity
 
-## Phase E — DMS Premigration Assessment / CDC readiness
+```bash
+aws sts get-caller-identity
+```
 
-1. Run AWS DMS Premigration Assessment before changing the known PostgreSQL CDC gap.
-2. **SCREENSHOT NOW:** assessment finding, including `wal_level` if reported.
-3. Remediate only required source-side findings on the EC2 PostgreSQL source.
-4. For logical replication, apply the required PostgreSQL setting(s) and restart/reload only as required.
-5. Verify the EC2-hosted legacy application still works after the database configuration change.
-6. Re-run DMS Premigration Assessment.
-7. **SCREENSHOT NOW:** acceptable/pass reassessment.
+Purpose: prove which IAM principal is operating the migration.
 
-## Phase F — DMS Full Load + CDC
+### 2. S3 staging bucket
 
-1. Create DMS task using **Full Load + CDC**.
-2. Start task.
-3. Wait for Full Load completion and inspect table statistics.
-4. **SCREENSHOT NOW:** Full Load completion.
-5. Keep CDC running.
-6. **SCREENSHOT NOW:** CDC running/healthy.
-7. Reconcile the deterministic database baseline on RDS.
-8. Through the source Flask application on EC2, perform the controlled shipment status update.
-9. Verify the same shipment status and matching event appear on RDS through CDC.
-10. **SCREENSHOT NOW:** source write and matching target RDS change.
+Create a private bucket in `us-east-1`. For this execution:
 
-## Phase G — Stage 3: small operational files to S3
+```text
+madar-vm-import-197821101770
+```
 
-1. Create the S3 migration bucket/prefix only when ready to transfer.
-2. Transfer approved `exports/` and `reports/` artifacts using the simplest approved AWS-supported method.
-3. Preserve/use the source SHA-256 manifest for integrity validation.
-4. Verify object count/prefixes.
-5. Compare immutable baseline artifacts/checksums.
-6. **SCREENSHOT NOW:** S3 objects and successful integrity validation.
+Enable Block Public Access. This bucket is a temporary migration landing area, not a public distribution path.
 
-AWS DataSync is deliberately not used for this tiny representative file set. It would be evaluated for a large independent file estate.
+### 3. vmimport service role
 
-## Phase H — Application reconfiguration and validation
+Create role `vmimport` trusted by:
 
-1. Change the EC2 Flask application DB endpoint from local PostgreSQL to RDS using secure configuration.
-2. Start/restart the application as required.
-3. Test `/api/health`, `/api/summary`, representative reads and controlled write.
-4. Verify target DB persistence.
-5. Reconfigure/validate scheduled report path for target DB/storage.
-6. Review network exposure and management access.
-7. **SCREENSHOT NOW:** application functioning against the AWS target architecture.
+```text
+vmie.amazonaws.com
+```
 
-## Phase I — Final cutover
+with ExternalId:
 
-1. Capture final source/intermediate baseline.
-2. Freeze new writes for the short cutover window.
-3. Wait until DMS CDC is caught up.
-4. Reconcile final database state.
-5. Confirm operational files are current.
-6. Complete the MGN cutover/finalization workflow as appropriate.
-7. Direct operations to the EC2 + RDS target.
-8. Run full acceptance checklist.
-9. Keep rollback source until acceptance is explicit.
-10. **SCREENSHOT NOW:** accepted final target state.
+```text
+vmimport
+```
 
-## Phase J — Rollback
+Grant only the S3 read and EC2 image/snapshot permissions needed for VM Import/Export.
 
-Rollback if there is an unexplained integrity mismatch, failed critical read/write path, unacceptable replication gap, missing operational state, or an unsafe network/security issue that cannot be corrected inside the window.
+### 4. PassRole authorization
 
-Rollback means returning operations to the preserved known-good source/intermediate state rather than destroying the source and attempting risky emergency repairs.
+Before a multi-GB upload/import, verify that the operator is allowed to pass the role:
 
-## Phase K — Post-cutover protection
+```bash
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::197821101770:user/mohammed-admin \
+  --action-names iam:PassRole \
+  --resource-arns arn:aws:iam::197821101770:role/vmimport \
+  --query 'EvaluationResults[0].EvalDecision' \
+  --output text
+```
 
-After acceptance, evaluate/enable AWS Backup for target resources where useful. AWS Backup is post-cutover protection; it does not replace the independent pre-migration `pg_dump` and PostgreSQL configuration backup.
+Expected:
 
-If enabled, **SCREENSHOT NOW:** target recovery point/backup evidence.
+```text
+allowed
+```
 
-## Phase L — Cleanup
+## Phase E — Upload VMDK
 
-1. Stop/delete DMS task and replication capacity.
-2. Finalize/clean MGN migration resources according to the service workflow.
-3. Remove the temporary EC2-local PostgreSQL dependency after the application is confirmed on RDS; do not delete anything needed for rollback before acceptance.
-4. Terminate temporary/test EC2 instances no longer needed.
-5. Delete unneeded EBS volumes/snapshots.
-6. Delete RDS after final evidence if the lab is being fully torn down; avoid an unnecessary final snapshot unless intentionally retained.
-7. Remove unused public IPv4 resources.
-8. Empty/delete temporary S3 data if not retained as approved evidence.
-9. Delete temporary security groups/routes/subnets/VPC after dependencies are gone.
-10. Inspect Billing/Cost Explorer and service consoles for residual resources.
-11. Record end time and actual credit/cost delta.
-12. **SCREENSHOT NOW:** cleanup/cost evidence.
+Run from **Windows PowerShell**, not CloudShell, because the exported VMDK is on the local `C:` drive:
+
+```powershell
+aws s3 cp "C:\Users\SCAR\Documents\Virtual Machines\New folder\MADAR-LEGACY-01-disk1.vmdk" `
+  "s3://madar-vm-import-197821101770/MADAR-LEGACY-01-disk1.vmdk" `
+  --region us-east-1
+```
+
+After completion:
+
+```powershell
+aws s3 ls s3://madar-vm-import-197821101770/ --region us-east-1
+```
+
+Validation: object exists and size is consistent with the local export.
+
+## Phase F — Start ImportImage
+
+Only after S3 verification, create a container description that references the S3 VMDK and run `aws ec2 import-image` using service role `vmimport`.
+
+Record immediately:
+
+- ImportTaskId,
+- initial status,
+- description,
+- role used,
+- source bucket/key.
+
+Then monitor with `describe-import-image-tasks` until completion.
+
+Do not move on while status is merely `active`. Capture the exact status message if the task fails.
+
+Expected successful output:
+
+```text
+ImportImage task -> completed -> AMI ID + snapshot
+```
+
+## Phase G — Launch imported EC2
+
+After AMI completion:
+
+1. verify AMI state,
+2. select an x86 instance type allowed by the account plan,
+3. attach only required security-group ingress,
+4. launch in the approved lab subnet,
+5. wait for EC2 status checks,
+6. obtain management access,
+7. do not expose PostgreSQL publicly.
+
+## Phase H — EC2 acceptance
+
+Validate in this order:
+
+```text
+boot
+-> filesystem/LVM
+-> eth0/DHCP/default route/DNS
+-> SSH or selected management path
+-> systemctl --failed
+-> PostgreSQL enabled/active
+-> madar_legacy exists
+-> table/row reconciliation
+-> Flask health/read/write
+-> operational files/job behavior
+```
+
+If boot or data integrity fails, stop and preserve the imported image/task evidence. Do not compensate by silently rebuilding the target.
+
+## Phase I — Database replatform
+
+Only after EC2 acceptance:
+
+1. create private RDS PostgreSQL,
+2. create minimum suitable DMS capacity,
+3. define EC2 PostgreSQL source and RDS target endpoints,
+4. run DMS Premigration Assessment,
+5. capture `wal_level`/CDC finding,
+6. remediate required settings on EC2 source,
+7. reassess,
+8. run Full Load + CDC,
+9. reconcile database,
+10. perform controlled shipment/event write and verify it reaches RDS.
+
+## Phase J — File replatform
+
+Transfer approved operational exports/reports to S3 and validate object count plus SHA-256/content. DataSync remains unnecessary for this tiny representative data set.
+
+## Phase K — Cutover
+
+- freeze writes for the short final window,
+- ensure CDC is caught up,
+- reconcile final database state,
+- point Flask to RDS securely,
+- validate read/write paths,
+- validate scheduled processing,
+- explicitly accept or abort,
+- retain rollback anchor until acceptance.
+
+## Phase L — Rollback
+
+Rollback triggers include unexplained data differences, critical boot/application failure, unsafe network exposure, unacceptable replication lag or missing operational state.
+
+Rollback means returning operations to the preserved known-good source/intermediate state, not improvising destructive repairs under time pressure.
+
+## Phase M — Cleanup
+
+After acceptance/evidence:
+
+- stop/delete DMS resources,
+- terminate temporary EC2 targets no longer required,
+- remove unneeded EBS snapshots/AMI artifacts after deciding what evidence/recovery point to retain,
+- delete the VM-import VMDK object and staging bucket when no longer required,
+- delete temporary IAM role/policies if not retained for repeatability,
+- delete lab RDS if the phase is fully torn down,
+- remove temporary SG/routes/network resources,
+- check all service consoles for residual resources,
+- record actual cost/credit delta.
 
 ## Final rule
 
-Never declare migration success because an AWS resource says `Available`. Success requires data reconciliation, CDC proof, file integrity, application functionality, operational validation and an understood rollback path.
+A successful import task is not a successful migration. A successful migration requires accepted business data and workload behavior on the target plus an understood rollback and cleanup state.
