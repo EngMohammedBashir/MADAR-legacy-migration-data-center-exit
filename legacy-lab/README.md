@@ -1,10 +1,22 @@
-# MADAR Legacy Lab
+# MADAR Legacy Lab — Pre-Cloud Baseline Representation
 
 ## Purpose
 
-This directory contains the representative source workload used to make Phase 03 a real migration exercise rather than an empty infrastructure demo.
+This directory contains the **reproducible lab representation of MADAR's pre-cloud legacy shipment workload** used by Phase 03.
 
-The workload is intentionally small enough to run on a constrained laptop but complete enough to expose the kinds of dependencies that matter during migration: application runtime, relational state, operational files, scheduled processing, credentials/configuration, network listeners and recovery artifacts.
+The transformation narrative assumes that the legacy estate exists before Phase 01. When Phase 03 required a source that could actually be discovered, protected, migrated, cut over and validated, this VMware workload was constructed to represent that inherited estate.
+
+Therefore two timelines coexist without contradiction:
+
+```text
+Business / architecture story:
+Pre-Cloud Legacy Estate -> Phase 01 -> Phase 02 -> Phase 03 migration
+
+Lab implementation chronology:
+Phase 03 preparation -> build representative VMware source -> baseline -> migrate
+```
+
+The workload is intentionally small enough to run on constrained hardware but complete enough to expose migration-relevant dependencies: application runtime, relational state, operational files, scheduled processing, credentials/configuration, network listeners and recovery artifacts.
 
 ## Implemented workload
 
@@ -23,29 +35,7 @@ MADAR-LEGACY-01 (VMware)
 └── scheduled report job
 ```
 
-No real customer or personal data is used.
-
-## Data model
-
-### Customers
-
-```text
-customer_id, company_name, region
-```
-
-### Shipments
-
-```text
-shipment_id, customer_id, origin, destination, status, created_at, updated_at
-```
-
-### Shipment events
-
-```text
-event_id, shipment_id, event_type, event_time
-```
-
-The application write path updates shipment state and inserts a matching shipment event transactionally.
+No real customer or personal data is used. The single-VM topology is a migration lab constraint, not a claim about a literal production data center.
 
 ## Why deterministic data matters
 
@@ -63,32 +53,21 @@ A controlled write-path exercise changed a representative shipment and inserted 
 
 ## Operational state outside PostgreSQL
 
-The VM also produces operational CSV/report artifacts. These are included deliberately so the migration cannot be reduced to "move the database" or "move the Flask code." File count/content integrity is protected with SHA-256 baselines and later replatformed toward S3.
+The VM also produces operational CSV/report artifacts. These are included deliberately so the migration cannot be reduced to "move the database" or "move the Flask code." File count/content integrity was protected with SHA-256 baselines and later replatformed to S3.
 
 ## Scheduled/background processing
 
-A Linux scheduled job queries PostgreSQL and generates a timestamped operations report without an interactive user session. This creates a real dependency on:
+A Linux scheduled job queries PostgreSQL and generates a timestamped operations report without an interactive user session. This creates a dependency chain:
 
 ```text
-scheduler -> DB credentials/connectivity -> query -> local output path -> log
+scheduler -> DB credentials/connectivity -> query -> output path -> log
 ```
-
-The dependency must be revalidated/reconfigured after migration.
 
 ## Source recovery discipline
 
-The lab created and validated:
+The lab created and validated PostgreSQL custom-format backups, operational-file archive/integrity evidence, PostgreSQL configuration backup before CDC changes, and a final PostgreSQL logical dump before VM Import/Export. Binary backups are excluded from Git.
 
-- PostgreSQL custom-format backups,
-- operational-file archive/integrity evidence,
-- PostgreSQL configuration backup before CDC changes,
-- a final PostgreSQL logical dump before the VM Import/Export image was exported.
-
-Binary backups are excluded from Git.
-
-## Migration relevance
-
-The lab exposed multiple logical migration dispositions inside one VM:
+## Migration disposition
 
 ```text
 Ubuntu + Flask      -> rehost to EC2
@@ -97,11 +76,11 @@ Operational files   -> replatform to S3
 Scheduled job       -> retain/reconfigure to target dependencies
 ```
 
-It also produced a real hypervisor-migration preparation problem: the original VMware guest used `ens33`; the final VM Import/Export image was prepared and reboot-tested with `eth0` + DHCP plus EC2-relevant ENA/NVMe driver readiness.
+The lab also produced a real hypervisor-migration preparation problem: the original VMware guest used `ens33`; the final VM Import/Export image was prepared and reboot-tested with `eth0` + DHCP plus EC2-relevant ENA/NVMe driver readiness.
 
 ## Directory purpose
 
-- `app/` — source application, schema/seed and UI assets.
+- `app/` — representative source application, schema/seed and UI assets.
 - `scripts/` — scheduled/background workload logic.
 
-Implementation/build history lives in `docs/source-application-build.md` and `docs/source-lab-build-log.md`. Current migration execution lives in `CURRENT-STATE.md` and `docs/07-vm-import-execution-guide.md`.
+Implementation/build history lives in `docs/source-application-build.md` and `docs/source-lab-build-log.md`. Those build records prove reproducibility; they do not redefine the scenario's pre-cloud chronology.
