@@ -1,8 +1,22 @@
-# Source Estate — Logical vs Representative Lab Topology
+# Source Estate — Pre-Cloud Baseline vs Representative Lab Topology
+
+## Timeline model
+
+MADAR's transformation narrative begins with an existing legacy estate before Phase 01. Phase 03 does not create that business history; it consumes it as the source for a migration engagement.
+
+Because this is a hands-on portfolio project rather than access to a real corporate data center, Phase 03 constructed a compact VMware environment that **represents** the inherited estate and makes discovery, migration, cutover and validation executable.
+
+```text
+SCENARIO TIME
+Legacy estate exists -> Phase 01 -> Phase 02 -> Phase 03 migration
+
+LAB TIME
+Phase 03 preparation -> construct representative source -> baseline -> migrate
+```
+
+Both are true: one describes the company scenario, the other describes how the experiment is made reproducible.
 
 ## Logical MADAR legacy estate
-
-The company narrative separates responsibilities even though the lab consolidates them on one VM:
 
 | Logical role | Responsibility | Migration concern |
 |---|---|---|
@@ -66,22 +80,11 @@ The application also generates operational CSV/report artifacts and a scheduled 
 
 Migration without a baseline is like a logistics company moving hundreds of parcels without a manifest: arrival of the truck does not prove every parcel arrived correctly.
 
-The baseline therefore includes:
-
-- VM/OS/runtime versions,
-- disk/boot/network topology,
-- listening ports and services,
-- database schema/version and row counts,
-- representative application behavior,
-- scheduled processing,
-- file count/content integrity,
-- independent PostgreSQL/file recovery artifacts,
-- migration-specific source configuration changes,
-- rollback source state.
+The baseline therefore includes VM/OS/runtime versions, disk/boot/network topology, listening ports/services, database schema/version/row counts, representative application behavior, scheduled processing, file count/content integrity, independent recovery artifacts, migration-specific source configuration changes and rollback source state.
 
 ## Source-to-target decomposition
 
-Although the lab begins as one VM, migration disposition is selected per logical component:
+Although the representative lab begins as one VM, migration disposition is selected per logical component:
 
 ```text
 Ubuntu + Flask      -> rehost to EC2
@@ -91,4 +94,4 @@ Scheduled job       -> retain/reconfigure against target dependencies
 Administration      -> move toward AWS-native management where practical
 ```
 
-This distinction prevents the representative single-VM lab from being mistaken for the desired final architecture.
+This distinction prevents the representative single-VM lab from being mistaken either for the desired final architecture or for a claim that the legacy business estate was invented during Phase 03.
